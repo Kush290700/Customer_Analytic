@@ -4,5 +4,6 @@ pandas==2.1.1
 python-dotenv==1.0.0
 pymssql==2.2.2
 SQLAlchemy==2.0.22
-streamlit==1.27.0
-XlsxWriter==3.1.2
+streamlit==1.45.1
+pillow==10.1.0
+xlsxwriter==3.1.2
