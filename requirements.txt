@@ -2,7 +2,6 @@ altair==4.2.2
 numpy==1.26.4
 pandas==2.1.1
 python-dotenv==1.0.0
-pyarrow==12.0.0
 pymssql==2.2.2
 SQLAlchemy==2.0.22
 streamlit==1.26.0
