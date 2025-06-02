@@ -208,8 +208,17 @@ st.sidebar.header("1. Date Range")
 start_date = st.sidebar.date_input("Start Date", value=pd.to_datetime("2023-01-01"))
 end_date   = st.sidebar.date_input("End Date",   value=pd.to_datetime("today"))
 
-# Load + prepare data once
+# ─── Load + prepare data once ─────────────────────────────────────────────
 df_all = load_and_prepare(PARQUET_PATH, str(start_date), str(end_date))
+
+# ─── VERY IMPORTANT: Apply date filter here ⟵ DATE FILTER APPLIED HERE ────
+# Convert start_date/end_date (datetime.date) to Timestamps for comparison
+start_ts = pd.to_datetime(start_date)
+end_ts   = pd.to_datetime(end_date)
+df_all = df_all[
+    (df_all["Date"] >= start_ts) &
+    (df_all["Date"] <= end_ts)
+].copy()
 
 # ─── Sidebar: Filters ───────────────────────────────────────────────────────
 st.sidebar.header("2. Region Filter")
