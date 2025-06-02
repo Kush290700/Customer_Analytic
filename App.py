@@ -375,23 +375,23 @@ section = st.sidebar.radio("Go to", tabs)
 if section == "Instructions":
     st.title("📝 Instructions & Usage")
     st.markdown(
-        """
+    """
         **Advanced Meat Warehouse Customer Analytics Dashboard**
 
         **How to use:**
         1. **Date Range** near top of sidebar: filter orders by date.
-        2. **Region Filter**: multi‐select “All” or specific regions.
-        3. **Customer Type**: multi‐select “All”, “Retail”, “Wholesale”.
-        4. **Shipping Method**: multi‐select “All” or specific methods.
-        5. **Customer Filter**: multi‐select “All” or specific customers.
+        2. **Region Filter**: multi-select “All” or specific regions.
+        3. **Customer Type**: multi-select “All”, “Retail”, “Wholesale”.
+        4. **Shipping Method**: multi-select “All” or specific methods.
+        5. **Customer Filter**: multi-select “All” or specific customers.
 
         **Tabs:**
-        - **Customer KPIs**: Top‐line metrics and trends.
+        - **Customer KPIs**: Top-line metrics and trends.
         - **Segmentation & RFM**: RFM scoring and segments.
         - **Cohort & Retention**: cohort heatmap and churn trends.
         - **CLV & Profitability**: lifetime value and margin charts.
         - **Advanced Analytics**: extra customer analytics graphs.
-        - **Recommendations**: top‐customers & new‐customer recommendations.
+        - **Recommendations**: top-customers & new-customer recommendations.
         - **Customer Drilldown**: detailed view for a selected customer.
         - **Download Excel**: export full customer details with instructions.
 
@@ -401,9 +401,10 @@ if section == "Instructions":
         - Required columns in the Parquet:
           `CustomerId, CustomerName, RegionName, IsRetail, Address1, Address2, City, Province, PostalCode, Phone, Email,`
           `OrderId, Revenue, Cost, Date, WeightLb, ItemCount, ShippingMethodRequested, ProductName (optional)`.
+        - **Data currently starts from January 1, 2023 in the dataframe and will remain so until the next update.**
         
         Enjoy exploring your customer data!
-        """
+    """
     )
     st.stop()
 
