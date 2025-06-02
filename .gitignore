@@ -1,0 +1,12 @@
+# ignore the virtual environment folder
+.venv/
+
+# python bytecode caches
+__pycache__/
+*.pyc
+
+# any data caches or local dumps
+cached_data.parquet
+
+# editor/project files you don’t want in Git
+.vscode/
