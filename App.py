@@ -583,7 +583,9 @@ elif section == "Cohort & Retention":
 
     # Build cohort DataFrame
     cust_cohort = cust_agg.copy()
+    # Create a Period index (e.g. 2023-01, 2023-02, etc.)
     cust_cohort["CohortMonth"] = cust_cohort["FirstOrder"].dt.to_period("M")
+
     cohort_df = (
         cust_cohort
             .groupby("CohortMonth", dropna=False)
@@ -593,24 +595,40 @@ elif section == "Cohort & Retention":
             )
             .reset_index()
     )
+
+    # Convert Period ("2023-01", etc.) to a Timestamp for plotting
+    cohort_df["CohortMonthTS"] = cohort_df["CohortMonth"].dt.to_timestamp()
+
+    # (Optional) Sort by the timestamp so the bars are chronological
+    cohort_df = cohort_df.sort_values("CohortMonthTS")
+
     cohort_df["RetentionRate"] = (
         cohort_df["StillActive90"] / cohort_df["TotalCustomers"]
     ).round(2)
 
     st.subheader("Retention by Cohort Month")
+
     cohort_chart = (
         alt.Chart(cohort_df)
            .mark_bar()
            .encode(
-               x=alt.X("CohortMonth:O", title="Cohort Month"),
+               # Use a temporal axis so Altair will format as “YYYY-MM”
+               x=alt.X(
+                   "CohortMonthTS:T",
+                   title="Cohort Month",
+                   axis=alt.Axis(format="%Y-%m", tickCount="month")
+               ),
                y=alt.Y("TotalCustomers:Q", title="New Customers"),
                tooltip=[
-                   "CohortMonth", "TotalCustomers", "StillActive90",
-                   alt.Tooltip("RetentionRate:Q", format=".2f")
+                   alt.Tooltip("CohortMonthTS:T", title="Cohort"),
+                   alt.Tooltip("TotalCustomers:Q", title="Count"),
+                   alt.Tooltip("StillActive90:Q", title="Still Active ≤ 90d"),
+                   alt.Tooltip("RetentionRate:Q", format=".0%", title="Retention")
                ]
            )
            .properties(height=300)
     )
+
     st.altair_chart(cohort_chart, use_container_width=True)
 
     st.markdown("---")
