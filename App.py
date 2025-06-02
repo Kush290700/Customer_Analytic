@@ -5,33 +5,32 @@ import altair as alt
 from io import BytesIO
 from pathlib import Path
 
-# Import your data‐loading functions
+# ─── Import your data‐loading functions (unchanged) ────────────────────────
 from data_loader import fetch_and_store_data, load_data
 
-# ─── Page Config ─────────────────────────────────────────────────────────────
+# ─── Page Config ─────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Advanced Meat Warehouse Customer Analytics",
     page_icon="🥩",
-    layout="wide"
+    layout="wide",
 )
 
-# ─── Constants ───────────────────────────────────────────────────────────────
+# ─── Constants ───────────────────────────────────────────────────────────
 PARQUET_PATH = "cached_data.parquet"
 
-# ─── Utility: Customer Excel Export ─────────────────────────────────────────
+# ─── Utility: Customer Excel Export ───────────────────────────────────────
 def customer_excel_export(cust_agg: pd.DataFrame) -> BytesIO:
     """
     Create an Excel file with:
       - Sheet 'Instructions' (describing content)
       - Sheet 'Customer Details' (one row per customer with address/contact)
     """
-    # Ensure GrossProfit exists
-    if "TotalRevenue" in cust_agg.columns and "TotalCost" in cust_agg.columns:
-        cust_agg = cust_agg.copy()
-        cust_agg["GrossProfit"] = cust_agg["TotalRevenue"] - cust_agg["TotalCost"]
+    df_copy = cust_agg.copy()
+    # Ensure GrossProfit exists:
+    if {"TotalRevenue", "TotalCost"}.issubset(df_copy.columns):
+        df_copy["GrossProfit"] = df_copy["TotalRevenue"] - df_copy["TotalCost"]
     else:
-        cust_agg = cust_agg.copy()
-        cust_agg["GrossProfit"] = 0.0
+        df_copy["GrossProfit"] = 0.0
 
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
@@ -72,13 +71,14 @@ def customer_excel_export(cust_agg: pd.DataFrame) -> BytesIO:
             "FirstOrder", "LastOrder", "Address1", "Address2", "Address",
             "City", "Province", "PostalCode", "Phone", "Email"
         ]
-        detail_cols = [c for c in detail_cols if c in cust_agg.columns]
-        cust_agg[detail_cols].to_excel(writer, sheet_name="Customer Details", index=False)
+        # Only keep columns that actually exist:
+        detail_cols = [c for c in detail_cols if c in df_copy.columns]
+        df_copy[detail_cols].to_excel(writer, sheet_name="Customer Details", index=False)
 
     output.seek(0)
     return output
 
-# ─── Utility: Fetch & Cache Data ────────────────────────────────────────────
+# ─── Utility: Fetch & Cache Data ─────────────────────────────────────────
 @st.cache_data(show_spinner=True)
 def load_and_prepare(path: str, start: str, end: str) -> pd.DataFrame:
     """
@@ -102,10 +102,12 @@ def load_and_prepare(path: str, start: str, end: str) -> pd.DataFrame:
     ]
     for col in required:
         if col not in df.columns:
-            df[col] = ""
+            df[col] = np.nan
 
     # Build “Address” column
-    df["Address"] = df["Address1"].fillna("").astype(str) + " " + df["Address2"].fillna("").astype(str)
+    df["Address1"] = df["Address1"].fillna("").astype(str)
+    df["Address2"] = df["Address2"].fillna("").astype(str)
+    df["Address"] = (df["Address1"] + " " + df["Address2"]).str.strip()
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
 
     # Numeric safety
@@ -117,39 +119,45 @@ def load_and_prepare(path: str, start: str, end: str) -> pd.DataFrame:
     # CustomerType from IsRetail
     df["CustomerType"] = np.where(
         df["IsRetail"].astype(str).str.lower().isin(["true", "1"]),
-        "Retail", "Wholesale"
+        "Retail",
+        "Wholesale",
     )
 
     return df
 
-# ─── Recommendation Logic (no webscraping) ─────────────────────────────────
+# ─── Recommendation Logic (no webscraping) ────────────────────────────────
 def get_top_n_customers_all_regions(data: pd.DataFrame, n=50) -> pd.DataFrame:
     """
     Return top N customers by total revenue per region.
     """
     grouped = (
-        data.groupby(["RegionName", "CustomerName"])["Revenue"]
-        .sum()
-        .reset_index()
-        .rename(columns={"Revenue": "TotalRevenue"})
-        .sort_values(["RegionName", "TotalRevenue"], ascending=[True, False])
+        data.groupby(["RegionName", "CustomerName"], dropna=False)["Revenue"]
+            .sum()
+            .reset_index()
+            .rename(columns={"Revenue": "TotalRevenue"})
+            .sort_values(["RegionName", "TotalRevenue"], ascending=[True, False])
     )
     region_frames = []
-    for region, gdf in grouped.groupby("RegionName"):
+    for region, gdf in grouped.groupby("RegionName", dropna=False):
         top_slice = gdf.head(n)
         region_frames.append(top_slice)
     if region_frames:
         return pd.concat(region_frames, ignore_index=True)
     return pd.DataFrame(columns=["RegionName", "CustomerName", "TotalRevenue"])
 
-def recommend_new_customers(data: pd.DataFrame, top_n_df: pd.DataFrame, min_lineitem_revenue=500) -> pd.DataFrame:
+def recommend_new_customers(
+    data: pd.DataFrame,
+    top_n_df: pd.DataFrame,
+    min_lineitem_revenue=500
+) -> pd.DataFrame:
     """
     For each region in top_n_df, find new customers not in top N,
-    but with any line-item revenue > min_lineitem_revenue.
+    but with any line‐item revenue > min_lineitem_revenue.
     Return DataFrame with {RegionName, CustomerName, TotalRevenue, OrderFrequency, TotalQuantity}.
     """
     recommended_frames = []
-    for region, subtop in top_n_df.groupby("RegionName"):
+
+    for region, subtop in top_n_df.groupby("RegionName", dropna=False):
         rd = data[data["RegionName"] == region].copy()
         if rd.empty:
             continue
@@ -159,22 +167,29 @@ def recommend_new_customers(data: pd.DataFrame, top_n_df: pd.DataFrame, min_line
         if rd.empty:
             continue
         recs = (
-            rd.groupby(["RegionName", "CustomerName"])
-            .agg(
-                TotalRevenue=("Revenue", "sum"),
-                OrderFrequency=("OrderId", "nunique"),
-                TotalQuantity=("ItemCount", "sum")
-            )
-            .reset_index()
-            .sort_values(["TotalRevenue", "OrderFrequency"], ascending=[False, False])
+            rd.groupby(["RegionName", "CustomerName"], dropna=False)
+              .agg(
+                  TotalRevenue=("Revenue", "sum"),
+                  OrderFrequency=("OrderId", "nunique"),
+                  TotalQuantity=("ItemCount", "sum")
+              )
+              .reset_index()
+              .sort_values(["TotalRevenue", "OrderFrequency"], ascending=[False, False])
         )
         recommended_frames.append(recs)
+
     if recommended_frames:
         return pd.concat(recommended_frames, ignore_index=True)
-    return pd.DataFrame(columns=["RegionName", "CustomerName", "TotalRevenue", "OrderFrequency", "TotalQuantity"])
+    return pd.DataFrame(columns=[
+        "RegionName", "CustomerName", "TotalRevenue", "OrderFrequency", "TotalQuantity"
+    ])
 
 @st.cache_data(show_spinner=True)
-def compute_recommendations(data: pd.DataFrame, top_n=50, min_lineitem_revenue=500):
+def compute_recommendations(
+    data: pd.DataFrame,
+    top_n: int = 50,
+    min_lineitem_revenue: float = 500
+):
     """
     Runs simplified recommendation steps:
       1. Top N per region
@@ -188,104 +203,143 @@ def compute_recommendations(data: pd.DataFrame, top_n=50, min_lineitem_revenue=5
         "recommended": recommended_df
     }
 
-# ─── Load & Prepare Data ────────────────────────────────────────────────────
+# ─── Sidebar: Date Range Inputs ────────────────────────────────────────────
 st.sidebar.header("1. Date Range")
 start_date = st.sidebar.date_input("Start Date", value=pd.to_datetime("2023-01-01"))
 end_date   = st.sidebar.date_input("End Date",   value=pd.to_datetime("today"))
 
+# Load + prepare data once
 df_all = load_and_prepare(PARQUET_PATH, str(start_date), str(end_date))
 
-# ─── Sidebar: Filters ────────────────────────────────────────────────────────
+# ─── Sidebar: Filters ───────────────────────────────────────────────────────
 st.sidebar.header("2. Region Filter")
-regions = sorted(df_all["RegionName"].dropna().unique())
-region_options = ["All"] + regions
-selected_regions = st.sidebar.multiselect("Select Region(s)", region_options, default=["All"])
-if "All" in selected_regions or not selected_regions:
-    df_region = df_all.copy()
-else:
-    df_region = df_all[df_all["RegionName"].isin(selected_regions)]
+all_regions = sorted(df_all["RegionName"].dropna().unique())
+region_options = ["All"] + all_regions
+selected_regions = st.sidebar.multiselect(
+    "Select Region(s)",
+    region_options,
+    default=["All"]
+)
 
 st.sidebar.header("3. Customer Type")
-types = sorted(df_region["CustomerType"].unique())
-type_options = ["All"] + types
-selected_types = st.sidebar.multiselect("Select Type(s)", type_options, default=["All"])
-if "All" in selected_types or not selected_types:
-    df_type = df_region.copy()
-else:
-    df_type = df_region[df_region["CustomerType"].isin(selected_types)]
+all_types = sorted(df_all["CustomerType"].dropna().unique())
+type_options = ["All"] + all_types
+selected_types = st.sidebar.multiselect(
+    "Select Type(s)",
+    type_options,
+    default=["All"]
+)
 
 st.sidebar.header("4. Shipping Method")
-methods = sorted(df_type["ShippingMethodRequested"].dropna().unique())
-method_options = ["All"] + methods
-selected_methods = st.sidebar.multiselect("Select Method(s)", method_options, default=["All"])
-if "All" in selected_methods or not selected_methods:
-    df_ship = df_type.copy()
-else:
-    df_ship = df_type[df_type["ShippingMethodRequested"].isin(selected_methods)]
+all_methods = sorted(df_all["ShippingMethodRequested"].dropna().unique())
+method_options = ["All"] + all_methods
+selected_methods = st.sidebar.multiselect(
+    "Select Method(s)",
+    method_options,
+    default=["All"]
+)
 
 st.sidebar.header("5. Customer Filter")
-customers = sorted(df_ship["CustomerName"].dropna().unique())
-customer_options = ["All"] + customers
-selected_customers = st.sidebar.multiselect("Select Customer(s)", customer_options, default=["All"])
-if "All" in selected_customers or not selected_customers:
-    filtered = df_ship.copy()
-else:
-    filtered = df_ship[df_ship["CustomerName"].isin(selected_customers)]
+all_customers = sorted(df_all["CustomerName"].dropna().unique())
+customer_options = ["All"] + all_customers
+selected_customers = st.sidebar.multiselect(
+    "Select Customer(s)",
+    customer_options,
+    default=["All"]
+)
 
-no_data = filtered.empty
+# ─── Apply filters sequentially into df_filtered ────────────────────────────
+df_filtered = df_all.copy()
 
-# ─── Aggregate Per Customer ────────────────────────────────────────────────
+# Region filter
+if "All" not in selected_regions and selected_regions:
+    df_filtered = df_filtered[df_filtered["RegionName"].isin(selected_regions)]
+
+# Customer Type filter
+if "All" not in selected_types and selected_types:
+    df_filtered = df_filtered[df_filtered["CustomerType"].isin(selected_types)]
+
+# Shipping Method filter
+if "All" not in selected_methods and selected_methods:
+    df_filtered = df_filtered[df_filtered["ShippingMethodRequested"].isin(selected_methods)]
+
+# CustomerName filter
+if "All" not in selected_customers and selected_customers:
+    df_filtered = df_filtered[df_filtered["CustomerName"].isin(selected_customers)]
+
+no_data = df_filtered.empty
+
+# ─── Compute per‐customer aggregates (cust_agg) ─────────────────────────────
 if not no_data:
     named_agg = {
         "CustomerName": ("CustomerName", "first"),
-        "RegionName":   ("RegionName",   "first"),
-        "TotalRevenue": ("Revenue",      "sum"),
-        "TotalCost":    ("Cost",         "sum"),
-        "TotalOrders":  ("OrderId",      "nunique"),
-        "TotalWeight":  ("WeightLb",     "sum"),
-        "FirstOrder":   ("Date",         "min"),
-        "LastOrder":    ("Date",         "max"),
-        "Address1":     ("Address1",     "first"),
-        "Address2":     ("Address2",     "first"),
-        "Address":      ("Address",      "first"),
-        "City":         ("City",         "first"),
-        "Province":     ("Province",     "first"),
-        "PostalCode":   ("PostalCode",   "first"),
-        "Phone":        ("Phone",        "first"),
-        "Email":        ("Email",        "first"),
-        "CustomerType": ("CustomerType", "first")
+        "RegionName":   ("RegionName", "first"),
+        "TotalRevenue": ("Revenue", "sum"),
+        "TotalCost":    ("Cost", "sum"),
+        "TotalOrders":  ("OrderId", "nunique"),
+        "TotalWeight":  ("WeightLb", "sum"),
+        "FirstOrder":   ("Date", "min"),
+        "LastOrder":    ("Date", "max"),
+        "Address1":     ("Address1", "first"),
+        "Address2":     ("Address2", "first"),
+        "Address":      ("Address", "first"),
+        "City":         ("City", "first"),
+        "Province":     ("Province", "first"),
+        "PostalCode":   ("PostalCode", "first"),
+        "Phone":        ("Phone", "first"),
+        "Email":        ("Email", "first"),
+        "CustomerType": ("CustomerType", "first"),
+        "IsRetail":     ("IsRetail", "first")
     }
-    if "IsRetail" in filtered.columns:
-        named_agg["IsRetail"] = ("IsRetail", "first")
 
     cust_agg = (
-        filtered
-        .groupby("CustomerId", dropna=False)
-        .agg(**named_agg)
-        .reset_index()
+        df_filtered
+            .groupby("CustomerId", dropna=False)
+            .agg(**named_agg)
+            .reset_index()
     )
 
-    cust_agg["AvgOrderWt"] = (cust_agg["TotalWeight"] / cust_agg["TotalOrders"]).fillna(0).round(2)
-    cust_agg["GrossMarginPct"] = ((cust_agg["TotalRevenue"] - cust_agg["TotalCost"]) 
-                                  / cust_agg["TotalRevenue"] * 100).round(2).fillna(0)
-    cust_agg["DaysSinceLastOrder"] = (pd.Timestamp("today") - cust_agg["LastOrder"]).dt.days.clip(lower=0)
-    cust_agg["MonthsActive"] = ((pd.Timestamp("today") - cust_agg["FirstOrder"]).dt.days // 30).clip(lower=1)
-    cust_agg["RepeatRate"] = (cust_agg["TotalOrders"].fillna(0).astype(int) / cust_agg["MonthsActive"]).round(2)
+    # Derived columns
+    cust_agg["AvgOrderWt"] = (
+        cust_agg["TotalWeight"] / cust_agg["TotalOrders"].replace({0: np.nan})
+    ).fillna(0).round(2)
+
+    cust_agg["GrossMarginPct"] = (
+        (cust_agg["TotalRevenue"] - cust_agg["TotalCost"])
+        / cust_agg["TotalRevenue"].replace({0: np.nan}) * 100
+    ).round(2).fillna(0)
+
+    cust_agg["DaysSinceLastOrder"] = (
+        (pd.Timestamp("today") - cust_agg["LastOrder"])
+        .dt.days.clip(lower=0)
+    )
+
+    cust_agg["MonthsActive"] = (
+        ((pd.Timestamp("today") - cust_agg["FirstOrder"]).dt.days // 30)
+        .clip(lower=1)
+    )
+
+    cust_agg["RepeatRate"] = (
+        cust_agg["TotalOrders"].fillna(0).astype(int)
+        / cust_agg["MonthsActive"].replace({0: 1})
+    ).round(2)
+
     cust_agg = cust_agg.sort_values("TotalRevenue", ascending=False)
 else:
     cust_agg = pd.DataFrame(columns=[
         "CustomerId","CustomerName","RegionName","IsRetail","CustomerType",
-        "TotalRevenue","TotalCost","TotalOrders","TotalWeight","AvgOrderWt","FirstOrder","LastOrder",
-        "Address1","Address2","Address","City","Province","PostalCode","Phone","Email",
-        "GrossMarginPct","DaysSinceLastOrder","MonthsActive","RepeatRate"
+        "TotalRevenue","TotalCost","TotalOrders","TotalWeight","AvgOrderWt",
+        "FirstOrder","LastOrder","Address1","Address2","Address","City",
+        "Province","PostalCode","Phone","Email","GrossMarginPct",
+        "DaysSinceLastOrder","MonthsActive","RepeatRate"
     ])
 
-# ─── Precompute Recommendations ─────────────────────────────────────────────
-if not df_region.empty:
+# ─── Precompute Recommendations (per‐region “top50” + “recommended”) ──────
+if not df_filtered.empty:
     rec_results = compute_recommendations(
-        data = df_region,
-        top_n = 50,
-        min_lineitem_revenue = 500
+        data=df_filtered,
+        top_n=50,
+        min_lineitem_revenue=500
     )
 else:
     rec_results = {
@@ -293,7 +347,7 @@ else:
         "recommended": pd.DataFrame()
     }
 
-# ─── Tabs Navigation ─────────────────────────────────────────────────────────
+# ─── Tabs Navigation ───────────────────────────────────────────────────────
 tabs = [
     "Instructions",
     "Customer KPIs",
@@ -308,41 +362,43 @@ tabs = [
 st.sidebar.markdown("---")
 section = st.sidebar.radio("Go to", tabs)
 
-# ─── Instructions Tab ───────────────────────────────────────────────────────
+# ─── Instructions Tab ─────────────────────────────────────────────────────
 if section == "Instructions":
     st.title("📝 Instructions & Usage")
-    st.markdown("""
-    **Advanced Meat Warehouse Customer Analytics Dashboard**
+    st.markdown(
+        """
+        **Advanced Meat Warehouse Customer Analytics Dashboard**
 
-    **How to use:**
-    1. **Date Range** near top of sidebar: filter orders by date.
-    2. **Region Filter**: multi-select “All” or specific regions.
-    3. **Customer Type**: multi-select “All”, “Retail”, “Wholesale”.
-    4. **Shipping Method**: multi-select “All” or specific methods.
-    5. **Customer Filter**: multi-select “All” or specific customers.
+        **How to use:**
+        1. **Date Range** near top of sidebar: filter orders by date.
+        2. **Region Filter**: multi‐select “All” or specific regions.
+        3. **Customer Type**: multi‐select “All”, “Retail”, “Wholesale”.
+        4. **Shipping Method**: multi‐select “All” or specific methods.
+        5. **Customer Filter**: multi‐select “All” or specific customers.
 
-    **Tabs:**
-    - **Customer KPIs**: Top-line metrics and trends.
-    - **Segmentation & RFM**: RFM scoring and segments.
-    - **Cohort & Retention**: cohort heatmap and churn trends.
-    - **CLV & Profitability**: lifetime value and margin charts.
-    - **Advanced Analytics**: extra customer analytics graphs.
-    - **Recommendations**: top‐customers & new-customer recommendations.
-    - **Customer Drilldown**: detailed view for a selected customer.
-    - **Download Excel**: export full customer details with instructions.
+        **Tabs:**
+        - **Customer KPIs**: Top‐line metrics and trends.
+        - **Segmentation & RFM**: RFM scoring and segments.
+        - **Cohort & Retention**: cohort heatmap and churn trends.
+        - **CLV & Profitability**: lifetime value and margin charts.
+        - **Advanced Analytics**: extra customer analytics graphs.
+        - **Recommendations**: top‐customers & new‐customer recommendations.
+        - **Customer Drilldown**: detailed view for a selected customer.
+        - **Download Excel**: export full customer details with instructions.
 
-    **Data Setup:**
-    - On first run, the app will fetch from SQL Server for the chosen date range, writing `cached_data.parquet`.
-    - Subsequent visits use `cached_data.parquet`.
-    - Required columns in the Parquet:
-      `CustomerId, CustomerName, RegionName, IsRetail, Address1, Address2, City, Province, PostalCode, Phone, Email,`
-      `OrderId, Revenue, Cost, Date, WeightLb, ItemCount, ShippingMethodRequested, ProductName (optional)`.
-
-    Enjoy exploring your customer data!
-    """)
+        **Data Setup:**
+        - On first run, the app will fetch from SQL Server for the chosen date range, writing `cached_data.parquet`.
+        - Subsequent visits use `cached_data.parquet`.
+        - Required columns in the Parquet:
+          `CustomerId, CustomerName, RegionName, IsRetail, Address1, Address2, City, Province, PostalCode, Phone, Email,`
+          `OrderId, Revenue, Cost, Date, WeightLb, ItemCount, ShippingMethodRequested, ProductName (optional)`.
+        
+        Enjoy exploring your customer data!
+        """
+    )
     st.stop()
 
-# ─── Customer KPIs Tab ─────────────────────────────────────────────
+# ─── Customer KPIs Tab ────────────────────────────────────────────────────
 elif section == "Customer KPIs":
     st.title("📊 Customer KPIs & Leaderboard")
     if no_data:
@@ -350,10 +406,16 @@ elif section == "Customer KPIs":
         st.stop()
 
     total_cust = cust_agg["CustomerId"].nunique()
-    total_rev = filtered["Revenue"].sum()
-    total_orders = filtered["OrderId"].nunique()
-    aov = (filtered.groupby("OrderId")["Revenue"].sum().mean() if total_orders > 0 else 0.0)
-    overall_churn_pct = (cust_agg["DaysSinceLastOrder"] > 90).sum() * 100.0 / total_cust if total_cust else 0.0
+    total_rev = df_filtered["Revenue"].sum()
+    total_orders = df_filtered["OrderId"].nunique()
+    aov = (
+        df_filtered.groupby("OrderId")["Revenue"].sum().mean()
+        if total_orders > 0 else 0.0
+    )
+    overall_churn_pct = (
+        cust_agg["DaysSinceLastOrder"].gt(90).sum() * 100.0 / total_cust
+        if total_cust else 0.0
+    )
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Total Customers", f"{total_cust:,}")
@@ -364,30 +426,40 @@ elif section == "Customer KPIs":
 
     st.markdown("---")
     st.subheader("🏆 Top 10 Customers by Revenue")
-    top10 = cust_agg.head(10)[[
-        "CustomerName", "RegionName", "CustomerType", "TotalRevenue", "TotalOrders", "RepeatRate", "GrossMarginPct"
-    ]].rename(columns={
-        "TotalRevenue": "Revenue",
-        "TotalOrders": "Orders",
-        "GrossMarginPct": "Margin %"
-    })
-    st.dataframe(top10.style.format({
-        "Revenue": "${:,.0f}",
-        "RepeatRate": "{:.2f}",
-        "Margin %": "{:.1f}%"
-    }), use_container_width=True)
+    top10 = (
+        cust_agg.head(10)[[
+            "CustomerName", "RegionName", "CustomerType",
+            "TotalRevenue", "TotalOrders", "RepeatRate", "GrossMarginPct"
+        ]].rename(columns={
+            "TotalRevenue": "Revenue",
+            "TotalOrders": "Orders",
+            "GrossMarginPct": "Margin %"
+        })
+    )
+    st.dataframe(
+        top10.style.format({
+            "Revenue": "${:,.0f}",
+            "RepeatRate": "{:.2f}",
+            "Margin %": "{:.1f}%"
+        }),
+        use_container_width=True
+    )
 
     st.markdown("---")
     st.subheader("📈 Monthly Revenue & Orders Trend")
     by_month = (
-        filtered
-        .groupby(pd.Grouper(key="Date", freq="M"))
-        .agg(MonthRevenue=("Revenue", "sum"), MonthOrders=("OrderId", "nunique"))
-        .reset_index()
+        df_filtered
+            .groupby(pd.Grouper(key="Date", freq="M"), dropna=False)
+            .agg(MonthRevenue=("Revenue", "sum"), MonthOrders=("OrderId", "nunique"))
+            .reset_index()
     )
     by_month["month_ts"] = by_month["Date"].dt.to_period("M").dt.to_timestamp()
-    trend_df = by_month.melt(id_vars="month_ts", value_vars=["MonthRevenue", "MonthOrders"],
-                              var_name="Metric", value_name="Value")
+    trend_df = by_month.melt(
+        id_vars="month_ts",
+        value_vars=["MonthRevenue", "MonthOrders"],
+        var_name="Metric",
+        value_name="Value"
+    )
     trend = (
         alt.Chart(trend_df)
            .mark_line(point=True)
@@ -401,7 +473,7 @@ elif section == "Customer KPIs":
     )
     st.altair_chart(trend, use_container_width=True)
 
-# ─── Segmentation & RFM Tab ─────────────────────────────────────
+# ─── Segmentation & RFM Tab ───────────────────────────────────────────────
 elif section == "Segmentation & RFM":
     st.title("👥 Customer Segmentation & RFM Analysis")
     if no_data:
@@ -413,9 +485,17 @@ elif section == "Segmentation & RFM":
     rfm["Frequency"] = rfm["TotalOrders"]
     rfm["Monetary"] = rfm["TotalRevenue"]
 
-    rfm["RecencyScore"] = pd.qcut(rfm["Recency"], 4, labels=[4,3,2,1]).astype(int)
-    rfm["FrequencyScore"] = pd.qcut(rfm["Frequency"].rank(method="first", ascending=False), 4, labels=[1,2,3,4]).astype(int)
-    rfm["MonetaryScore"] = pd.qcut(rfm["Monetary"].rank(method="first", ascending=False), 4, labels=[1,2,3,4]).astype(int)
+    rfm["RecencyScore"] = pd.qcut(rfm["Recency"], 4, labels=[4, 3, 2, 1]).astype(int)
+    rfm["FrequencyScore"] = pd.qcut(
+        rfm["Frequency"].rank(method="first", ascending=False),
+        4,
+        labels=[1, 2, 3, 4]
+    ).astype(int)
+    rfm["MonetaryScore"] = pd.qcut(
+        rfm["Monetary"].rank(method="first", ascending=False),
+        4,
+        labels=[1, 2, 3, 4]
+    ).astype(int)
     rfm["RFM_Score"] = rfm["RecencyScore"] + rfm["FrequencyScore"] + rfm["MonetaryScore"]
 
     def label_rfm(row):
@@ -426,17 +506,24 @@ elif section == "Segmentation & RFM":
         elif row["RFM_Score"] >= 6:
             return "At Risk"
         return "Dormant"
+
     rfm["RFM_Segment"] = rfm.apply(label_rfm, axis=1)
 
     st.subheader("RFM Segment Distribution")
-    seg_counts = rfm.groupby("RFM_Segment")["CustomerId"].count().reset_index().sort_values("CustomerId", ascending=False)
+    seg_counts = (
+        rfm.groupby("RFM_Segment", dropna=False)["CustomerId"]
+           .count()
+           .reset_index()
+           .rename(columns={"CustomerId": "Count"})
+           .sort_values("Count", ascending=False)
+    )
     pie = (
         alt.Chart(seg_counts)
            .mark_arc(innerRadius=50)
            .encode(
-               theta="CustomerId:Q",
+               theta="Count:Q",
                color=alt.Color("RFM_Segment:N", title="Segment"),
-               tooltip=["RFM_Segment", "CustomerId"]
+               tooltip=["RFM_Segment", "Count"]
            )
            .properties(height=300)
     )
@@ -444,14 +531,16 @@ elif section == "Segmentation & RFM":
 
     st.markdown("---")
     st.subheader("Top 10 by RFM Score")
-    top_rfm = rfm.sort_values("RFM_Score", ascending=False).head(10)[[
-        "CustomerName", "RegionName", "RFM_Score", "Recency", "Frequency", "Monetary"
-    ]].rename(columns={
-        "RFM_Score": "RFM",
-        "Recency": "Days Since Last",
-        "Frequency": "Orders",
-        "Monetary": "Revenue"
-    })
+    top_rfm = (
+        rfm.sort_values("RFM_Score", ascending=False).head(10)[[
+            "CustomerName", "RegionName", "RFM_Score", "Recency", "Frequency", "Monetary"
+        ]].rename(columns={
+            "RFM_Score": "RFM",
+            "Recency": "Days Since Last",
+            "Frequency": "Orders",
+            "Monetary": "Revenue"
+        })
+    )
     st.dataframe(top_rfm.style.format({"Revenue": "${:,.0f}"}), use_container_width=True)
 
     st.markdown("---")
@@ -475,26 +564,28 @@ elif section == "Segmentation & RFM":
     )
     st.altair_chart(scatter, use_container_width=True)
 
-# ─── Cohort & Retention Tab ─────────────────────────────────────
+# ─── Cohort & Retention Tab ───────────────────────────────────────────────
 elif section == "Cohort & Retention":
     st.title("📆 Cohort Analysis & Retention")
     if no_data:
         st.warning("No data available for selected filters.")
         st.stop()
 
-    # Cohort retention
+    # Build cohort DataFrame
     cust_cohort = cust_agg.copy()
     cust_cohort["CohortMonth"] = cust_cohort["FirstOrder"].dt.to_period("M")
     cohort_df = (
         cust_cohort
-        .groupby("CohortMonth")
-        .agg(
-            TotalCustomers=("CustomerId", "count"),
-            StillActive90=("DaysSinceLastOrder", lambda x: (x <= 90).sum())
-        )
-        .reset_index()
+            .groupby("CohortMonth", dropna=False)
+            .agg(
+                TotalCustomers=("CustomerId", "count"),
+                StillActive90=("DaysSinceLastOrder", lambda x: (x <= 90).sum())
+            )
+            .reset_index()
     )
-    cohort_df["RetentionRate"] = (cohort_df["StillActive90"] / cohort_df["TotalCustomers"]).round(2)
+    cohort_df["RetentionRate"] = (
+        cohort_df["StillActive90"] / cohort_df["TotalCustomers"]
+    ).round(2)
 
     st.subheader("Retention by Cohort Month")
     cohort_chart = (
@@ -504,7 +595,8 @@ elif section == "Cohort & Retention":
                x=alt.X("CohortMonth:O", title="Cohort Month"),
                y=alt.Y("TotalCustomers:Q", title="New Customers"),
                tooltip=[
-                   "CohortMonth", "TotalCustomers", "StillActive90", alt.Tooltip("RetentionRate:Q", format=".2f")
+                   "CohortMonth", "TotalCustomers", "StillActive90",
+                   alt.Tooltip("RetentionRate:Q", format=".2f")
                ]
            )
            .properties(height=300)
@@ -512,7 +604,6 @@ elif section == "Cohort & Retention":
     st.altair_chart(cohort_chart, use_container_width=True)
 
     st.markdown("---")
-    # Churn Risk Visualization with threshold filter
     st.subheader("Churn Risk by Threshold")
     thresh = st.select_slider(
         "Select Churn Threshold (days since last order)",
@@ -522,11 +613,11 @@ elif section == "Cohort & Retention":
     churn_df = cust_agg[cust_agg["DaysSinceLastOrder"] > thresh]
     churn_by_region = (
         churn_df
-        .groupby("RegionName")["CustomerId"]
-        .nunique()
-        .reset_index()
-        .rename(columns={"CustomerId": "ChurnCount"})
-        .sort_values("ChurnCount", ascending=False)
+            .groupby("RegionName", dropna=False)["CustomerId"]
+            .nunique()
+            .reset_index()
+            .rename(columns={"CustomerId": "ChurnCount"})
+            .sort_values("ChurnCount", ascending=False)
     )
     if churn_by_region.empty:
         st.write(f"No customers inactive for more than {thresh} days.")
@@ -544,10 +635,9 @@ elif section == "Cohort & Retention":
         st.altair_chart(churn_chart, use_container_width=True)
 
     st.markdown("---")
-    # Monthly Churn Trend (for threshold = 90d)
     st.subheader("Monthly Churn Trend (Threshold = 90d)")
-    first_order_overall = filtered["Date"].min()
-    last_order_overall = filtered["Date"].max()
+    first_order_overall = df_filtered["Date"].min()
+    last_order_overall = df_filtered["Date"].max()
     if pd.notnull(first_order_overall) and pd.notnull(last_order_overall):
         month_range = pd.period_range(
             start=first_order_overall.to_period("M"),
@@ -577,11 +667,12 @@ elif section == "Cohort & Retention":
         st.write("Insufficient order date range to compute monthly churn trend.")
 
     st.markdown("---")
-    # Customer Behavior Analysis: New vs Returning revenue
     st.subheader("New vs Returning Revenue (date range)")
-    merged = filtered.copy()
+    merged = df_filtered.copy()
     first_order_map = cust_agg.set_index("CustomerId")["FirstOrder"].to_dict()
-    merged["IsNewOrder"] = merged.apply(lambda r: r["Date"] == first_order_map.get(r["CustomerId"]), axis=1)
+    merged["IsNewOrder"] = merged.apply(
+        lambda r: r["Date"] == first_order_map.get(r["CustomerId"]), axis=1
+    )
     new_rev = merged[merged["IsNewOrder"]]["Revenue"].sum()
     ret_rev = merged[~merged["IsNewOrder"]]["Revenue"].sum()
     behavior_df = pd.DataFrame({
@@ -601,32 +692,27 @@ elif section == "Cohort & Retention":
     st.altair_chart(pie, use_container_width=True)
 
     st.markdown("---")
-    # Download detailed churned customer list
     st.subheader("Download Churned Customer Details")
     if churn_df.empty:
         st.write(f"No customers have been inactive for more than {thresh} days.")
     else:
-        # Build a detailed DataFrame of churned customers
         churn_detail_df = churn_df[[
             "CustomerId", "CustomerName", "RegionName",
             "LastOrder", "DaysSinceLastOrder",
             "Address", "City", "Province", "PostalCode", "Phone", "Email"
         ]].drop_duplicates()
 
-        # Bring in TotalRevenue & TotalCost from cust_agg
         revenue_cost = cust_agg[["CustomerId", "TotalRevenue", "TotalCost"]].drop_duplicates()
         churn_detail_df = churn_detail_df.merge(
             revenue_cost,
             on="CustomerId",
             how="left"
         )
-        # Compute GrossProfit = TotalRevenue − TotalCost
         churn_detail_df["GrossProfit"] = (
-            churn_detail_df["TotalRevenue"].fillna(0) -
-            churn_detail_df["TotalCost"].fillna(0)
+            churn_detail_df["TotalRevenue"].fillna(0)
+            - churn_detail_df["TotalCost"].fillna(0)
         )
 
-        # Reorder columns for Excel sheet
         final_cols = [
             "CustomerId", "CustomerName", "RegionName",
             "LastOrder", "DaysSinceLastOrder",
@@ -636,10 +722,8 @@ elif section == "Cohort & Retention":
         final_cols = [c for c in final_cols if c in churn_detail_df.columns]
         churn_export_df = churn_detail_df[final_cols]
 
-        # Generate Excel
         output = BytesIO()
         with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-            # Sheet name “ChurnedCustomers”
             churn_export_df.to_excel(writer, sheet_name="ChurnedCustomers", index=False)
         output.seek(0)
 
@@ -650,7 +734,7 @@ elif section == "Cohort & Retention":
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-# ─── CLV & Profitability Tab ─────────────────────────────────────
+# ─── CLV & Profitability Tab ─────────────────────────────────────────────
 elif section == "CLV & Profitability":
     st.title("💰 Customer Lifetime Value & Profitability")
     if no_data:
@@ -658,20 +742,31 @@ elif section == "CLV & Profitability":
         st.stop()
 
     cust_clv = cust_agg.copy()
-    cust_clv["AvgOrderValue"] = (cust_clv["TotalRevenue"] / cust_clv["TotalOrders"]).fillna(0)
-    cust_clv["OrdersPerYear"] = (cust_clv["TotalOrders"] / cust_clv["MonthsActive"] * 12).fillna(0)
+    cust_clv["AvgOrderValue"] = (
+        cust_clv["TotalRevenue"] / cust_clv["TotalOrders"].replace({0: np.nan})
+    ).fillna(0)
+    cust_clv["OrdersPerYear"] = (
+        cust_clv["TotalOrders"] / cust_clv["MonthsActive"].replace({0: 1}) * 12
+    ).fillna(0)
     life_years = 3
-    cust_clv["CLV"] = (cust_clv["AvgOrderValue"] * cust_clv["OrdersPerYear"] * life_years).round(2)
+    cust_clv["CLV"] = (
+        cust_clv["AvgOrderValue"] * cust_clv["OrdersPerYear"] * life_years
+    ).round(2)
 
     st.subheader("Top 10 by CLV")
-    top_clv = cust_clv.sort_values("CLV", ascending=False).head(10)[[
-        "CustomerName", "RegionName", "AvgOrderValue", "OrdersPerYear", "CLV", "GrossMarginPct"
-    ]]
-    st.dataframe(top_clv.style.format({
-        "AvgOrderValue": "${:,.2f}",
-        "CLV": "${:,.0f}",
-        "GrossMarginPct": "{:.1f}%"
-    }), use_container_width=True)
+    top_clv = (
+        cust_clv.sort_values("CLV", ascending=False).head(10)[[
+            "CustomerName", "RegionName", "AvgOrderValue", "OrdersPerYear", "CLV", "GrossMarginPct"
+        ]]
+    )
+    st.dataframe(
+        top_clv.style.format({
+            "AvgOrderValue": "${:,.2f}",
+            "CLV": "${:,.0f}",
+            "GrossMarginPct": "{:.1f}%"
+        }),
+        use_container_width=True
+    )
 
     st.markdown("---")
     st.subheader("Gross Margin % by Customer")
@@ -685,7 +780,7 @@ elif section == "CLV & Profitability":
                    "CustomerName",
                    alt.Tooltip("TotalRevenue:Q", format="$,.0f"),
                    alt.Tooltip("TotalCost:Q", format="$,.0f"),
-                   alt.Tooltip("GrossMarginPct:Q", format=".1f"), 
+                   alt.Tooltip("GrossMarginPct:Q", format=".1f"),
                    alt.Tooltip("CLV:Q", format="$,.0f")
                ]
            )
@@ -716,7 +811,7 @@ elif section == "CLV & Profitability":
     )
     st.altair_chart(profit_scatter, use_container_width=True)
 
-# ─── Advanced Analytics Tab ─────────────────────────────────────
+# ─── Advanced Analytics Tab ───────────────────────────────────────────────
 elif section == "Advanced Analytics":
     st.title("📊 Advanced Customer Analytics")
     if no_data:
@@ -766,10 +861,10 @@ elif section == "Advanced Analytics":
     st.markdown("---")
     # 3) Revenue by Day of Week
     st.subheader("3. Revenue by Day of Week")
-    df_week = filtered.copy()
+    df_week = df_filtered.copy()
     df_week["Weekday"] = df_week["Date"].dt.day_name()
-    weekday_rev = df_week.groupby("Weekday")["Revenue"].sum().reset_index()
-    order = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+    weekday_rev = df_week.groupby("Weekday", dropna=False)["Revenue"].sum().reset_index()
+    order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     weekday_rev["Weekday"] = pd.Categorical(weekday_rev["Weekday"], categories=order, ordered=True)
     weekday_rev = weekday_rev.sort_values("Weekday")
     weekday_chart = (
@@ -800,10 +895,10 @@ elif section == "Advanced Analytics":
     )
     st.altair_chart(freq_hist, use_container_width=True)
 
-# ─── Recommendations Tab ─────────────────────────────────────────────
+# ─── Recommendations Tab ─────────────────────────────────────────────────
 elif section == "Recommendations":
     st.title("⭐ Customer Recommendations")
-    if df_region.empty:
+    if df_filtered.empty:
         st.warning("No data available for the selected filters.")
         st.stop()
 
@@ -829,19 +924,23 @@ elif section == "Recommendations":
             use_container_width=True
         )
 
-# ─── Customer Drilldown Tab ─────────────────────────────────────
+# ─── Customer Drilldown Tab ───────────────────────────────────────────────
 elif section == "Customer Drilldown":
     st.title("🔎 Customer Detail Drilldown")
     if no_data:
         st.warning("No data available for selected filters.")
         st.stop()
 
-    cust_names = sorted(cust_agg["CustomerName"].unique())
+    cust_names = sorted(cust_agg["CustomerName"].dropna().unique())
+    if not cust_names:
+        st.warning("No customers to select.")
+        st.stop()
+
     selected = st.selectbox("Choose a Customer", cust_names)
 
     if selected:
         cust_id = cust_agg[cust_agg["CustomerName"] == selected]["CustomerId"].iloc[0]
-        df_c = filtered[filtered["CustomerId"] == cust_id]
+        df_c = df_filtered[df_filtered["CustomerId"] == cust_id].copy()
 
         info = cust_agg[cust_agg["CustomerId"] == cust_id].iloc[0]
         st.subheader(f"Profile: {info['CustomerName']} ({info['RegionName']})")
@@ -857,14 +956,22 @@ elif section == "Customer Drilldown":
 
         st.markdown("---")
         st.subheader("Order History Timeline")
+        # Use pd.Grouper to ensure “Date” remains a datetime column after grouping
         orders_c = (
-            df_c.groupby(df_c["Date"].dt.to_period("M"))
-            .agg(MonthlyRevenue=("Revenue", "sum"), MonthlyOrders=("OrderId", "nunique"))
-            .reset_index()
+            df_c.groupby(pd.Grouper(key="Date", freq="M"), dropna=False)
+                .agg(MonthlyRevenue=("Revenue", "sum"), MonthlyOrders=("OrderId", "nunique"))
+                .reset_index()
         )
-        orders_c["month_ts"] = orders_c["Date"].dt.to_timestamp()
+        orders_c["month_ts"] = orders_c["Date"]
         timeline = (
-            alt.Chart(orders_c.melt(id_vars="month_ts", value_vars=["MonthlyRevenue", "MonthlyOrders"], var_name="Metric", value_name="Value"))
+            alt.Chart(
+                orders_c.melt(
+                    id_vars="month_ts",
+                    value_vars=["MonthlyRevenue", "MonthlyOrders"],
+                    var_name="Metric",
+                    value_name="Value"
+                )
+            )
                .mark_line(point=True)
                .encode(
                    x=alt.X("month_ts:T", title="Month"),
@@ -882,10 +989,10 @@ elif section == "Customer Drilldown":
                 lambda x: x.split(" – ")[0] if " – " in x else x
             )
             pm_c = (
-                df_c.groupby("ProductCategory")
-                .agg(Spend=("Revenue", "sum"), Weight=("WeightLb", "sum"))
-                .reset_index()
-                .sort_values("Spend", ascending=False)
+                df_c.groupby("ProductCategory", dropna=False)
+                    .agg(Spend=("Revenue", "sum"), Weight=("WeightLb", "sum"))
+                    .reset_index()
+                    .sort_values("Spend", ascending=False)
             )
             st.subheader("Product Category Mix")
             pm_chart = (
@@ -894,15 +1001,19 @@ elif section == "Customer Drilldown":
                    .encode(
                        x=alt.X("Spend:Q", title="Spend ($)"),
                        y=alt.Y("ProductCategory:N", sort="-x", title=None),
-                       tooltip=["ProductCategory", alt.Tooltip("Spend:Q", format="$,.0f"), alt.Tooltip("Weight:Q", format=",.1f")]
+                       tooltip=[
+                           "ProductCategory",
+                           alt.Tooltip("Spend:Q", format="$,.0f"),
+                           alt.Tooltip("Weight:Q", format=",.1f")
+                       ]
                    )
                    .properties(height=300)
             )
             st.altair_chart(pm_chart, use_container_width=True)
         else:
-            st.write("No product-level data available.")
+            st.write("No product‐level data available.")
 
-# ─── Download Excel Tab ─────────────────────────────────────
+# ─── Download Excel Tab ───────────────────────────────────────────────────
 elif section == "Download Excel":
     st.title("⬇️ Download Customer Details (Excel)")
     if no_data:
