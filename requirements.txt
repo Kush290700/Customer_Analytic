@@ -1,8 +1,8 @@
 altair==4.2.2
-numpy==1.26.4
+numpy>=1.22.0
 pandas>=2.0.0
 python-dotenv==1.0.0
 pymssql>=2.2.7
-SQLAlchemy==2.0.22
+SQLAlchemy>=2.0.0
 streamlit==1.45.1
 xlsxwriter==3.1.2
