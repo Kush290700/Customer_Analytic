@@ -459,7 +459,7 @@ elif section == "Customer KPIs":
     st.subheader("📈 Monthly Revenue & Orders Trend")
     by_month = (
         df_filtered
-            .groupby(pd.Grouper(key="Date", freq="M"), dropna=False)
+            .groupby(pd.Grouper(key="Date", freq="ME"), dropna=False)
             .agg(MonthRevenue=("Revenue", "sum"), MonthOrders=("OrderId", "nunique"))
             .reset_index()
     )
