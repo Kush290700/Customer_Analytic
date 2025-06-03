@@ -401,7 +401,7 @@ if section == "Instructions":
         - Required columns in the Parquet:
           `CustomerId, CustomerName, RegionName, IsRetail, Address1, Address2, City, Province, PostalCode, Phone, Email,`
           `OrderId, Revenue, Cost, Date, WeightLb, ItemCount, ShippingMethodRequested, ProductName (optional)`.
-        - **Data currently starts from January 1, 2023 in the dataframe and will remain so until the next update.**
+        - **Data currently starts from January 1, 2022 in the dataframe and will remain so until the next update.**
         
         Enjoy exploring your customer data!
     """
