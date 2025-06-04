@@ -234,6 +234,7 @@ df_all = df_all[
     (df_all["Date"] <= end_ts)
 ].copy()
 
+
 # ─── Sidebar: Filters ───────────────────────────────────────────────────────
 st.sidebar.header("2. Region Filter")
 all_regions = sorted(df_all["RegionName"].dropna().unique())
@@ -244,15 +245,30 @@ selected_regions = st.sidebar.multiselect(
     default=["All"]
 )
 
-st.sidebar.header("3. Shipping Carrier")
-# Fix: use 'Carrier' (from shippers lookup) instead of ShippingMethodName
-all_carriers = sorted(df_all["Carrier"].dropna().unique())
-carrier_options = ["All"] + all_carriers
-selected_carriers = st.sidebar.multiselect(
-    "Select Carrier(s)",
-    carrier_options,
-    default=["All"]
-)
+# ─── Detect whether “Carrier” has any non‐null values ──────────────────────
+carrier_values = sorted(df_all["Carrier"].dropna().unique())
+
+if carrier_values:
+    # Case A: We have at least one valid Carrier
+    st.sidebar.header("3. Shipping Carrier")
+    carrier_options = ["All"] + carrier_values
+    selected_carriers = st.sidebar.multiselect(
+        "Select Carrier(s)",
+        carrier_options,
+        default=["All"]
+    )
+    use_carrier_filter = True
+else:
+    # Case B: No Carrier values found → fall back to ShippingMethodName
+    st.sidebar.header("3. Shipping Method")
+    method_values = sorted(df_all["ShippingMethodName"].dropna().unique())
+    method_options = ["All"] + method_values
+    selected_methods = st.sidebar.multiselect(
+        "Select Shipping Method(s)",
+        method_options,
+        default=["All"]
+    )
+    use_carrier_filter = False
 
 st.sidebar.header("4. Customer Filter")
 all_customers = sorted(df_all["CustomerName"].dropna().unique())
@@ -270,16 +286,19 @@ df_filtered = df_all.copy()
 if "All" not in selected_regions and selected_regions:
     df_filtered = df_filtered[df_filtered["RegionName"].isin(selected_regions)]
 
-# Carrier filter
-if "All" not in selected_carriers and selected_carriers:
-    df_filtered = df_filtered[df_filtered["Carrier"].isin(selected_carriers)]
+# Carrier or Method filter
+if use_carrier_filter:
+    if "All" not in selected_carriers and selected_carriers:
+        df_filtered = df_filtered[df_filtered["Carrier"].isin(selected_carriers)]
+else:
+    if "All" not in selected_methods and selected_methods:
+        df_filtered = df_filtered[df_filtered["ShippingMethodName"].isin(selected_methods)]
 
 # CustomerName filter
 if "All" not in selected_customers and selected_customers:
     df_filtered = df_filtered[df_filtered["CustomerName"].isin(selected_customers)]
 
 no_data = df_filtered.empty
-
 
 # ─── Compute per‐customer aggregates ────────────────────────────────────────
 @st.cache_data(show_spinner=True)
