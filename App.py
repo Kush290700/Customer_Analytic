@@ -40,7 +40,7 @@ def load_and_prepare(path: str, start: str, end: str) -> pd.DataFrame:
 
     df = df_fetched.copy()
 
-    # Ensure essential columns exist (add NaNs if missing)
+    # Ensure essential columns exist (fill with NaN if missing)
     required = [
         "CustomerId",
         "CustomerName",
@@ -56,7 +56,7 @@ def load_and_prepare(path: str, start: str, end: str) -> pd.DataFrame:
         "Date",
         "WeightLb",
         "ItemCount",
-        "ShippingMethodName",  # ← Now comes from Shippers.ShipperId → Name
+        "ShippingMethodName",  # ← comes from Shippers.Name
         "ProductName",
         "ShipDate"
     ]
