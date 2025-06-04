@@ -1,7 +1,5 @@
 # File: data_loader.py
 
-# (Unchanged except for the Address logic adjustment in load_and_prepare)
-
 import os
 import datetime
 import logging
