@@ -1,3 +1,5 @@
+# File: app.py
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -5,7 +7,7 @@ import altair as alt
 from io import BytesIO
 from pathlib import Path
 
-# ─── Import your data‐loading functions ────────────────────────────────────
+# ─── Import your data-loading functions ────────────────────────────────────
 from data_loader import fetch_and_store_data, load_data
 
 # ─── Page Config ─────────────────────────────────────────────────────────
@@ -23,7 +25,7 @@ PARQUET_PATH = "cached_data.parquet"
 @st.cache_data(show_spinner=True)
 def load_and_prepare(path: str, start: str, end: str) -> pd.DataFrame:
     """
-    Load from Parquet if it exists; otherwise fetch from DB and store.
+    Load from Parquet if exists; otherwise fetch from DB and store.
     Returns DataFrame with derived fields.
     """
     cache_file = Path(path)
@@ -38,7 +40,7 @@ def load_and_prepare(path: str, start: str, end: str) -> pd.DataFrame:
 
     df = df_fetched.copy()
 
-    # Ensure essential columns exist
+    # Ensure essential columns exist (add NaNs if missing)
     required = [
         "CustomerId",
         "CustomerName",
@@ -54,9 +56,9 @@ def load_and_prepare(path: str, start: str, end: str) -> pd.DataFrame:
         "Date",
         "WeightLb",
         "ItemCount",
-        "ShippingMethodName",  # ← from ShipperId → shipping_methods
+        "ShippingMethodName",  # ← Now comes from Shippers.ShipperId → Name
         "ProductName",
-        "ShipDate",
+        "ShipDate"
     ]
     for col in required:
         if col not in df.columns:
@@ -218,7 +220,7 @@ def compute_recommendations(
     """
     Runs:
       1. Top N per region
-      2. Recommend new customers (no scraping)
+      2. Recommend new customers
     Returns { "top50": DataFrame, "recommended": DataFrame }
     """
     top_n_df = get_top_n_customers_all_regions(data, n=top_n)
@@ -281,7 +283,7 @@ df_filtered = df_all.copy()
 if "All" not in selected_regions and selected_regions:
     df_filtered = df_filtered[df_filtered["RegionName"].isin(selected_regions)]
 
-# Shipping Method filter (via ShipperId → shipping_methods join)
+# Shipping Method filter (via ShipperId → Shippers.Name)
 if "All" not in selected_methods and selected_methods:
     df_filtered = df_filtered[df_filtered["ShippingMethodName"].isin(selected_methods)]
 
@@ -292,7 +294,7 @@ if "All" not in selected_customers and selected_customers:
 no_data = df_filtered.empty
 
 
-# ─── Compute per‐customer aggregates ────────────────────────────────────────
+# ─── Compute per-customer aggregates ───────────────────────────────────────
 @st.cache_data(show_spinner=True)
 def compute_customer_aggregates(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -345,6 +347,7 @@ def compute_customer_aggregates(df: pd.DataFrame) -> pd.DataFrame:
 
     cust_agg = cust_agg.sort_values("TotalRevenue", ascending=False)
     return cust_agg
+
 
 if not no_data:
     cust_agg = compute_customer_aggregates(df_filtered)
@@ -411,7 +414,7 @@ if section == "Instructions":
         **How to use:**
         1. **Date Range** (Sidebar): filter orders by date.
         2. **Region Filter**: multi-select “All” or specific regions.
-        3. **Shipping Method**: multi-select “All” or specific shipping methods (via `ShipperId → ShippingMethods.Name`).
+        3. **Shipping Method**: multi-select “All” or specific shipping methods (pulled from `Shippers.Name`).
         4. **Customer Filter**: multi-select “All” or specific customers.
 
         **Tabs:**
@@ -746,10 +749,10 @@ elif section == "Cohort & Retention":
     if churn_df.empty:
         st.write(f"No customers have been inactive for more than {thresh} days.")
     else:
-        churn_detail_df = churn_df[[ 
-            "CustomerId", "CustomerName", "RegionName", 
-            "LastOrder", "DaysSinceLastOrder", 
-            "Address", "City", "Province", "PostalCode" 
+        churn_detail_df = churn_df[[
+            "CustomerId", "CustomerName", "RegionName",
+            "LastOrder", "DaysSinceLastOrder",
+            "Address", "City", "Province", "PostalCode"
         ]].drop_duplicates()
 
         revenue_cost = cust_agg[["CustomerId", "TotalRevenue", "TotalCost"]].drop_duplicates()
