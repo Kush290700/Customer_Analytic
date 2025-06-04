@@ -1,5 +1,3 @@
-# File: data_loader.py
-
 import os
 import datetime
 import logging
@@ -268,10 +266,10 @@ def load_data(path: str = "cached_data.parquet") -> pd.DataFrame:
     if not cache_file.exists():
         raise FileNotFoundError(
             f"No cached file found at '{path}'.\n"
-            "Please run `data_loader.fetch_and_store_data(start_date, end_date, path)`\n"
-            "on a machine that can access the VPN‐protected database, so as to create the Parquet."
+            "Please run `fetch_and_store_data(...)` first to create the Parquet."
         )
 
+    # If read fails (e.g. ArrowInvalid), it will raise and be caught upstream.
     df = pd.read_parquet(cache_file)
     logger.info(f"📥 Loaded {len(df):,} rows from '{path}'.")
     return df
