@@ -1,3 +1,5 @@
+# File: data_loader.py
+
 import os
 import datetime
 import logging
@@ -79,7 +81,7 @@ def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> di
                 OrderLineId,
                 OrderId,
                 ProductId,
-                ShipperId,                   -- ← we will use this directly
+                ShipperId,                   -- ← We'll use this directly
                 QuantityShipped,
                 Price        AS SalePrice,
                 CostPrice    AS UnitCost,
@@ -117,14 +119,13 @@ def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> di
         """),
 
         "regions": text("SELECT RegionId, Name AS RegionName FROM dbo.Regions"),
-        "shippers": text("SELECT ShipperId, Name AS Carrier FROM dbo.Shippers"),
 
-        # ─── shipping_methods: use ShipperId as the join key ⟶ Name AS ShippingMethodName ──
-        "shipping_methods": text("""
+        # ─── READ “Shippers” (instead of ShippingMethods) ────────────────────────
+        "shippers": text("""
             SELECT
                 ShipperId,
-                Name               AS ShippingMethodName
-            FROM dbo.ShippingMethods
+                Name AS ShippingMethodName
+            FROM dbo.Shippers
             WHERE IsActive = 1
         """),
 
@@ -162,7 +163,7 @@ def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> di
 def prepare_full_data(raw: dict) -> pd.DataFrame:
     """
     Join together the raw tables into a single DataFrame, compute Revenue/Cost/Profit,
-    and add date‐related fields. Returns one “full” DataFrame.
+    and add date-related fields. Returns one “full” DataFrame.
     """
     orders = raw.get("orders", pd.DataFrame())
     lines  = raw.get("order_lines", pd.DataFrame())
@@ -170,7 +171,7 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
     if lines.empty:
         raise RuntimeError("No 'order_lines' returned – cannot prepare data")
 
-    # 1) Cast join‐key columns to string
+    # ─── 1) Cast join-key columns to string and strip whitespace ───────────────
     for df_, cols in [
         (orders, ["OrderId", "CustomerId", "SalesRepId", "ShippingMethodRequested"]),
         (lines,  ["OrderLineId", "OrderId", "ProductId", "ShipperId"])
@@ -180,11 +181,11 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
                 raise KeyError(f"Expected column '{c}' in {df_.columns.tolist()}")
             df_[c] = df_[c].astype(str).str.strip()
 
-    # 2) Merge orders + order_lines
+    # ─── 2) Merge orders + order_lines
     df = lines.merge(orders, on="OrderId", how="inner")
     logger.info(f"After join orders ↔ order_lines: {len(df):,} rows")
 
-    # 3) Lookups (customers, products, regions, shippers, suppliers)
+    # ─── 3) Lookups (customers, products, regions, suppliers) ────────────────
     lookups = {
         "customers":    ("CustomerId", [
                              "CustomerId","CustomerName","RegionId","IsRetail",
@@ -196,8 +197,6 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
                          ], raw.get("products")),
 
         "regions":      ("RegionId", ["RegionId","RegionName"], raw.get("regions")),
-
-        "shippers":     ("ShipperId", ["ShipperId","Carrier"], raw.get("shippers")),
 
         "suppliers":    ("SupplierId", ["SupplierId","SupplierName"], raw.get("suppliers")),
     }
@@ -213,24 +212,24 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
         df = df.merge(tbl[cols], on=keycol, how="left")
         logger.info(f"After merging '{name}': {len(df):,} rows")
 
-    # 4) Merge shipping_methods via lines.ShipperId → shipping_methods.ShipperId
-    sm = raw.get("shipping_methods", pd.DataFrame())
-    if not sm.empty:
-        sm["ShipperId"]           = sm["ShipperId"].astype(str).str.strip()
-        sm["ShippingMethodName"]  = sm["ShippingMethodName"].astype(str).str.strip()
+    # ─── 4) Merge “Shippers” via lines.ShipperId → shippers.ShipperId ─────────
+    shippers_df = raw.get("shippers", pd.DataFrame())
+    if not shippers_df.empty:
+        shippers_df["ShipperId"]           = shippers_df["ShipperId"].astype(str).str.strip()
+        shippers_df["ShippingMethodName"]  = shippers_df["ShippingMethodName"].astype(str).str.strip()
 
         df["ShipperId"] = df["ShipperId"].astype(str).str.strip()
 
         df = df.merge(
-            sm[["ShipperId", "ShippingMethodName"]],
+            shippers_df[["ShipperId", "ShippingMethodName"]],
             on="ShipperId",
             how="left"
         )
-        logger.info(f"After merging 'shipping_methods' → {len(df):,} rows")
+        logger.info(f"After merging 'shippers' → {len(df):,} rows")
     else:
         df["ShippingMethodName"] = np.nan
 
-    # 5) Packs aggregation
+    # ─── 5) Packs aggregation ─────────────────────────────────────────────────
     packs = raw.get("packs", pd.DataFrame())
     if not packs.empty:
         packs["PickedForOrderLine"] = packs["PickedForOrderLine"].astype(str).str.strip()
@@ -252,14 +251,14 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
         df["ItemCount"]    = 0.0
         df["DeliveryDate"] = pd.NaT
 
-    # 6) Numeric safety for key numeric fields
+    # ─── 6) Numeric safety for key numeric fields ──────────────────────────────
     for col in ["QuantityShipped", "SalePrice", "UnitCost", "WeightLb", "ItemCount"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
         else:
             df[col] = 0.0
 
-    # 7) Compute Revenue, Cost, Profit
+    # ─── 7) Compute Revenue, Cost, Profit ────────────────────────────────────
     df["UnitOfBillingId"] = df.get("UnitOfBillingId", "").astype(str)
 
     df["Revenue"] = np.where(
@@ -274,7 +273,7 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
     )
     df["Profit"] = df["Revenue"] - df["Cost"]
 
-    # 8) Date & delivery metrics
+    # ─── 8) Date & delivery metrics ───────────────────────────────────────────
     df["Date"]         = pd.to_datetime(df["CreatedAt_order"], errors="coerce").dt.normalize()
     df["ShipDate"]     = pd.to_datetime(df.get("ShipDate"),     errors="coerce")
     df["DeliveryDate"] = pd.to_datetime(df.get("DeliveryDate"), errors="coerce")
@@ -293,7 +292,7 @@ def fetch_and_store_data(start: str = "2020-01-01",
     1) Fetch raw tables behind the VPN
     2) Prepare & join them into one DataFrame
     3) Save that DataFrame to `path` in Parquet format
-    4) Return the freshly‐fetched DataFrame
+    4) Return the freshly-fetched DataFrame
     """
     raw = fetch_raw_tables(start, end)
     df  = prepare_full_data(raw)
@@ -307,15 +306,15 @@ def fetch_and_store_data(start: str = "2020-01-01",
 
 def load_data(path: str = "cached_data.parquet") -> pd.DataFrame:
     """
-    Load the locally‐stored Parquet file and return as a DataFrame.
+    Load the locally-stored Parquet file and return as a DataFrame.
     If the file does not exist, raises FileNotFoundError with instructions.
     """
     cache_file = Path(path)
     if not cache_file.exists():
         raise FileNotFoundError(
             f"No cached file found at '{path}'.\n"
-            "Please run `fetch_and_store_data(start_date, end_date, path)`"
-            " on a machine that can access the VPN‐protected database, so as to create the Parquet."
+            "Please run `fetch_and_store_data(start_date, end_date, path)`\n"
+            "on a machine that can access the VPN-protected database, so as to create the Parquet."
         )
     df = pd.read_parquet(cache_file)
     logger.info(f"📥 Loaded {len(df):,} rows from '{path}'.")
