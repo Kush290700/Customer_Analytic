@@ -23,17 +23,15 @@ PARQUET_PATH = "cached_data.parquet"
 @st.cache_data(show_spinner=True)
 def load_and_prepare(path: str, start: str, end: str) -> pd.DataFrame:
     """
-    Load from Parquet if it exists and is valid; otherwise fetch from DB and store.
+    Load from Parquet if it exists; otherwise fetch from DB and store.
     Returns DataFrame with derived fields.
     """
     cache_file = Path(path)
 
-    # Attempt to load existing Parquet; if it fails, re-fetch
     if cache_file.exists():
         try:
             df_fetched = load_data(path)
         except Exception:
-            # If Parquet is corrupt or incompatible, re-fetch
             df_fetched = fetch_and_store_data(start, end, path)
     else:
         df_fetched = fetch_and_store_data(start, end, path)
@@ -276,19 +274,23 @@ selected_customers = st.sidebar.multiselect(
     default=["All"]
 )
 
-# ─── Apply filters sequentially ───────────────────────────────────────────
+# ─── Apply filters sequentially into df_filtered ────────────────────────────
 df_filtered = df_all.copy()
 
+# Region filter
 if "All" not in selected_regions and selected_regions:
     df_filtered = df_filtered[df_filtered["RegionName"].isin(selected_regions)]
 
+# Shipping Method filter (via ShipperId → shipping_methods join)
 if "All" not in selected_methods and selected_methods:
     df_filtered = df_filtered[df_filtered["ShippingMethodName"].isin(selected_methods)]
 
+# CustomerName filter
 if "All" not in selected_customers and selected_customers:
     df_filtered = df_filtered[df_filtered["CustomerName"].isin(selected_customers)]
 
 no_data = df_filtered.empty
+
 
 # ─── Compute per‐customer aggregates ────────────────────────────────────────
 @st.cache_data(show_spinner=True)
@@ -409,7 +411,7 @@ if section == "Instructions":
         **How to use:**
         1. **Date Range** (Sidebar): filter orders by date.
         2. **Region Filter**: multi-select “All” or specific regions.
-        3. **Shipping Method**: multi-select “All” or specific shipping methods (based on `ShipperId` → `ShippingMethods.Name`).
+        3. **Shipping Method**: multi-select “All” or specific shipping methods (via `ShipperId → ShippingMethods.Name`).
         4. **Customer Filter**: multi-select “All” or specific customers.
 
         **Tabs:**
@@ -425,8 +427,8 @@ if section == "Instructions":
         **Data Setup:**
         - On first run, the app will fetch from SQL Server for the chosen date range, writing `cached_data.parquet`.
         - Subsequent visits use `cached_data.parquet`.
-        - Required columns in the Parquet:
-          `CustomerId, CustomerName, RegionName, Address1, Address2, City, Province, PostalCode,`
+        - Required columns in the Parquet include:
+          `CustomerId, CustomerName, RegionName, Address1, City, Province, PostalCode,`
           `OrderId, Revenue, Cost, Date, WeightLb, ItemCount, ShippingMethodName, ProductName, ShipDate`.
         - **Data currently starts from January 1, 2022 in the dataframe and will remain so until the next update.**
 
