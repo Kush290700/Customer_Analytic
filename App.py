@@ -259,7 +259,6 @@ selected_regions = st.sidebar.multiselect(
 )
 
 st.sidebar.header("3. Shipping Method")
-# Now filter on ShippingMethodName (which came from ShipperId → shipping_methods)
 all_methods = sorted(df_all["ShippingMethodName"].dropna().unique())
 method_options = ["All"] + all_methods
 selected_methods = st.sidebar.multiselect(
@@ -277,23 +276,19 @@ selected_customers = st.sidebar.multiselect(
     default=["All"]
 )
 
-# ─── Apply filters sequentially into df_filtered ────────────────────────────
+# ─── Apply filters sequentially ───────────────────────────────────────────
 df_filtered = df_all.copy()
 
-# Region filter
 if "All" not in selected_regions and selected_regions:
     df_filtered = df_filtered[df_filtered["RegionName"].isin(selected_regions)]
 
-# Shipping Method filter
 if "All" not in selected_methods and selected_methods:
     df_filtered = df_filtered[df_filtered["ShippingMethodName"].isin(selected_methods)]
 
-# CustomerName filter
 if "All" not in selected_customers and selected_customers:
     df_filtered = df_filtered[df_filtered["CustomerName"].isin(selected_customers)]
 
 no_data = df_filtered.empty
-
 
 # ─── Compute per‐customer aggregates ────────────────────────────────────────
 @st.cache_data(show_spinner=True)
