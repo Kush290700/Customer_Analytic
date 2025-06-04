@@ -1,3 +1,5 @@
+# File: data_loader.py
+
 import os
 import datetime
 import logging
@@ -74,6 +76,7 @@ def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> di
             WHERE OrderStatus = 'packed'
               AND CreatedAt BETWEEN :start AND :end
         """),
+
         "order_lines": text("""
             SELECT 
                 OrderLineId,
@@ -82,11 +85,12 @@ def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> di
                 ShipperId,
                 QuantityShipped,
                 Price        AS SalePrice,
-                CostPrice    AS UnitCost,
+                CostPrice    AS UnitCost,    -- <— alias CostPrice here if you like
                 DateShipped
             FROM dbo.OrderLines
             WHERE CreatedAt BETWEEN :start AND :end
         """),
+
         "customers": text("""
             SELECT
                 CustomerId,
@@ -102,6 +106,7 @@ def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> di
                 Email
             FROM dbo.Customers
         """),
+
         "products": text("""
             SELECT
                 ProductId,
@@ -110,21 +115,25 @@ def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> di
                 SKU,
                 Description   AS ProductName,
                 ListPrice     AS ProductListPrice,
-                CostPrice
+                CostPrice     AS UnitCost          -- <— THIS LINE CHANGED
             FROM dbo.Products
         """),
+
         "regions": text("SELECT RegionId, Name AS RegionName FROM dbo.Regions"),
         "shippers": text("SELECT ShipperId, Name AS Carrier FROM dbo.Shippers"),
-        # ─── shipping_methods: NOW filter by IsActive=1 and select ShipperId key ───
+
+        # ─── shipping_methods: select ShipperId → ShippingMethodName ─────────────
         "shipping_methods": text("""
             SELECT
-                ShippingMethodId,         -- not used for join here
+                ShippingMethodId,
                 ShipperId,
-                Name                      AS ShippingMethodName
+                Name               AS ShippingMethodName
             FROM dbo.ShippingMethods
             WHERE IsActive = 1
         """),
+
         "suppliers": text("SELECT SupplierId, Name AS SupplierName FROM dbo.Suppliers"),
+
         "packs": text("""
             WITH ol AS (
                 SELECT OrderLineId
@@ -182,16 +191,25 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
     # 3) Lookups (customers, products, regions, shippers, shipping_methods, suppliers)
     lookups = {
         "customers":    ("CustomerId",
-                         ["CustomerId","CustomerName","RegionId","IsRetail",
-                          "Address1","Address2","City","Province","PostalCode","Phone","Email"],
+                         [
+                             "CustomerId","CustomerName","RegionId","IsRetail",
+                             "Address1","Address2","City","Province","PostalCode","Phone","Email"
+                         ],
                          raw.get("customers")),
+
         "products":     ("ProductId",
-                         ["ProductId","SupplierId","UnitOfBillingId","ProductName","ProductListPrice","UnitCost"],
+                         [
+                             "ProductId","SupplierId","UnitOfBillingId","ProductName","ProductListPrice","UnitCost"
+                         ],
                          raw.get("products")),
+
         "regions":      ("RegionId", ["RegionId","RegionName"], raw.get("regions")),
+
         "shippers":     ("ShipperId", ["ShipperId","Carrier"], raw.get("shippers")),
+
         # ─── shipping_methods: JOIN ON lines.ShipperId → shipping_methods.ShipperId ───
         "smethods":     ("ShipperId", ["ShipperId","ShippingMethodName"], raw.get("shipping_methods")),
+
         "suppliers":    ("SupplierId", ["SupplierId","SupplierName"], raw.get("suppliers")),
     }
 
@@ -200,7 +218,6 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
             logger.warning(f"Lookup '{name}' missing or empty – skipping")
             continue
 
-        # The shipping_methods DataFrame already has a column "ShipperId" exactly matching lines["ShipperId"]
         for c in cols:
             tbl[c] = tbl[c].astype(str)
 
@@ -266,7 +283,7 @@ def fetch_and_store_data(start: str = "2020-01-01",
     """
     1) Fetch raw tables behind the VPN
     2) Prepare & join them into one DataFrame
-    3) Save that DataFrame to `path` in Parquet format
+    3) Write to Parquet
     4) Return the freshly‐fetched DataFrame
     """
     raw = fetch_raw_tables(start, end)
