@@ -118,7 +118,7 @@ def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> di
         "shippers": text("SELECT ShipperId, Name AS Carrier FROM dbo.Shippers"),
         "shipping_methods": text("""
             SELECT
-                ShippingMethodId  AS SMId,
+                ShipperId  AS SMId,
                 Name               AS ShippingMethodName
             FROM dbo.ShippingMethods
             WHERE IsActive = 1
