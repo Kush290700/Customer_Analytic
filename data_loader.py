@@ -1,5 +1,3 @@
-# File: data_loader.py
-
 import os
 import datetime
 import logging
@@ -53,6 +51,7 @@ def get_engine():
 def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> dict:
     """
     Fetch each of the “raw” tables from SQL Server for the given date range.
+    Returns a dict of DataFrames keyed by table name.
     """
     if end_date is None:
         end_date = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -116,10 +115,12 @@ def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> di
         """),
         "regions": text("SELECT RegionId, Name AS RegionName FROM dbo.Regions"),
         "shippers": text("SELECT ShipperId, Name AS Carrier FROM dbo.Shippers"),
+        # ─── shipping_methods: NOW filter by IsActive=1 and select ShipperId key ───
         "shipping_methods": text("""
             SELECT
-                ShipperId  AS SMId,
-                Name               AS ShippingMethodName
+                ShippingMethodId,         -- not used for join here
+                ShipperId,
+                Name                      AS ShippingMethodName
             FROM dbo.ShippingMethods
             WHERE IsActive = 1
         """),
@@ -185,12 +186,12 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
                           "Address1","Address2","City","Province","PostalCode","Phone","Email"],
                          raw.get("customers")),
         "products":     ("ProductId",
-                         ["ProductId","SupplierId","UnitOfBillingId","ProductName","ProductListPrice","CostPrice"],
+                         ["ProductId","SupplierId","UnitOfBillingId","ProductName","ProductListPrice","UnitCost"],
                          raw.get("products")),
         "regions":      ("RegionId", ["RegionId","RegionName"], raw.get("regions")),
         "shippers":     ("ShipperId", ["ShipperId","Carrier"], raw.get("shippers")),
-        # ─── shipping_methods: join on ShippingMethodRequested = SMId ─────────
-        "smethods":     ("ShippingMethodRequested", ["ShippingMethodRequested","ShippingMethodName"], raw.get("shipping_methods")),
+        # ─── shipping_methods: JOIN ON lines.ShipperId → shipping_methods.ShipperId ───
+        "smethods":     ("ShipperId", ["ShipperId","ShippingMethodName"], raw.get("shipping_methods")),
         "suppliers":    ("SupplierId", ["SupplierId","SupplierName"], raw.get("suppliers")),
     }
 
@@ -198,11 +199,11 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
         if tbl is None or tbl.empty:
             logger.warning(f"Lookup '{name}' missing or empty – skipping")
             continue
-        if name == "smethods":
-            # Already renamed ShippingMethodId → SMId in SQL
-            tbl = tbl.rename(columns={"SMId": "ShippingMethodRequested"})
+
+        # The shipping_methods DataFrame already has a column "ShipperId" exactly matching lines["ShipperId"]
         for c in cols:
             tbl[c] = tbl[c].astype(str)
+
         df = df.merge(tbl[cols], on=keycol, how="left")
         logger.info(f"After merging '{name}': {len(df):,} rows")
 
@@ -263,10 +264,10 @@ def fetch_and_store_data(start: str = "2020-01-01",
                          end:   str = None,
                          path:  str = "cached_data.parquet") -> pd.DataFrame:
     """
-    1) Fetch raw tables
-    2) Prepare & join
-    3) Write to Parquet
-    4) Return DataFrame
+    1) Fetch raw tables behind the VPN
+    2) Prepare & join them into one DataFrame
+    3) Save that DataFrame to `path` in Parquet format
+    4) Return the freshly‐fetched DataFrame
     """
     raw = fetch_raw_tables(start, end)
     df  = prepare_full_data(raw)
@@ -280,14 +281,15 @@ def fetch_and_store_data(start: str = "2020-01-01",
 
 def load_data(path: str = "cached_data.parquet") -> pd.DataFrame:
     """
-    Load the locally‐stored Parquet file and return. If it fails,
-    it will be caught upstream in load_and_prepare().
+    Load the locally‐stored Parquet file and return as a DataFrame.
+    If the file does not exist, raises FileNotFoundError with instructions.
     """
     cache_file = Path(path)
     if not cache_file.exists():
         raise FileNotFoundError(
             f"No cached file found at '{path}'.\n"
-            "Please run `fetch_and_store_data(...)` first to create the Parquet."
+            "Please run `fetch_and_store_data(start_date, end_date, path)`"
+            " on a machine that can access the VPN‐protected database, so as to create the Parquet."
         )
     df = pd.read_parquet(cache_file)
     logger.info(f"📥 Loaded {len(df):,} rows from '{path}'.")
