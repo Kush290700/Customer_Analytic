@@ -1,3 +1,5 @@
+# File: data_loader.py
+
 import os
 import datetime
 import logging
@@ -49,6 +51,9 @@ def get_engine():
 
 @lru_cache(maxsize=32)
 def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> dict:
+    """
+    Fetch each of the “raw” tables from SQL Server for the given date range.
+    """
     if end_date is None:
         end_date = datetime.datetime.now().strftime("%Y-%m-%d")
 
@@ -116,6 +121,7 @@ def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> di
                 ShippingMethodId  AS SMId,
                 Name               AS ShippingMethodName
             FROM dbo.ShippingMethods
+            WHERE IsActive = 1
         """),
         "suppliers": text("SELECT SupplierId, Name AS SupplierName FROM dbo.Suppliers"),
         "packs": text("""
@@ -148,6 +154,10 @@ def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> di
 
 
 def prepare_full_data(raw: dict) -> pd.DataFrame:
+    """
+    Join together the raw tables into a single DataFrame, compute Revenue/Cost/Profit,
+    and add date‐related fields. Returns one “full” DataFrame.
+    """
     orders = raw.get("orders", pd.DataFrame())
     lines  = raw.get("order_lines", pd.DataFrame())
 
@@ -168,7 +178,7 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
     df = lines.merge(orders, on="OrderId", how="inner")
     logger.info(f"After join orders ↔ order_lines: {len(df):,} rows")
 
-    # 3) Lookups (customers, products, regions, shippers, suppliers, shipping_methods)
+    # 3) Lookups (customers, products, regions, shippers, shipping_methods, suppliers)
     lookups = {
         "customers":    ("CustomerId",
                          ["CustomerId","CustomerName","RegionId","IsRetail",
@@ -179,6 +189,7 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
                          raw.get("products")),
         "regions":      ("RegionId", ["RegionId","RegionName"], raw.get("regions")),
         "shippers":     ("ShipperId", ["ShipperId","Carrier"], raw.get("shippers")),
+        # ─── shipping_methods: join on ShippingMethodRequested = SMId ─────────
         "smethods":     ("ShippingMethodRequested", ["ShippingMethodRequested","ShippingMethodName"], raw.get("shipping_methods")),
         "suppliers":    ("SupplierId", ["SupplierId","SupplierName"], raw.get("suppliers")),
     }
@@ -188,6 +199,7 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
             logger.warning(f"Lookup '{name}' missing or empty – skipping")
             continue
         if name == "smethods":
+            # Already renamed ShippingMethodId → SMId in SQL
             tbl = tbl.rename(columns={"SMId": "ShippingMethodRequested"})
         for c in cols:
             tbl[c] = tbl[c].astype(str)
@@ -250,26 +262,33 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
 def fetch_and_store_data(start: str = "2020-01-01",
                          end:   str = None,
                          path:  str = "cached_data.parquet") -> pd.DataFrame:
+    """
+    1) Fetch raw tables
+    2) Prepare & join
+    3) Write to Parquet
+    4) Return DataFrame
+    """
     raw = fetch_raw_tables(start, end)
     df  = prepare_full_data(raw)
 
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-
     df.to_parquet(out_path, index=False)
     logger.info(f"✅ Data written to '{path}' ({len(df):,} rows).")
     return df
 
 
 def load_data(path: str = "cached_data.parquet") -> pd.DataFrame:
+    """
+    Load the locally‐stored Parquet file and return. If it fails,
+    it will be caught upstream in load_and_prepare().
+    """
     cache_file = Path(path)
     if not cache_file.exists():
         raise FileNotFoundError(
             f"No cached file found at '{path}'.\n"
             "Please run `fetch_and_store_data(...)` first to create the Parquet."
         )
-
-    # If read fails (e.g. ArrowInvalid), it will raise and be caught upstream.
     df = pd.read_parquet(cache_file)
     logger.info(f"📥 Loaded {len(df):,} rows from '{path}'.")
     return df
