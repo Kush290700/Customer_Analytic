@@ -1,5 +1,3 @@
-# File: data_loader.py
-
 import os
 import datetime
 import logging
@@ -52,6 +50,7 @@ def get_engine():
 def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> dict:
     """
     Fetch each of the “raw” tables from SQL Server for the given date range.
+    Returns a dict of DataFrames keyed by table name.
     """
     if end_date is None:
         end_date = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -80,7 +79,7 @@ def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> di
                 OrderLineId,
                 OrderId,
                 ProductId,
-                ShipperId,
+                ShipperId,                   -- ← we will use this directly
                 QuantityShipped,
                 Price        AS SalePrice,
                 CostPrice    AS UnitCost,
@@ -120,10 +119,10 @@ def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> di
         "regions": text("SELECT RegionId, Name AS RegionName FROM dbo.Regions"),
         "shippers": text("SELECT ShipperId, Name AS Carrier FROM dbo.Shippers"),
 
-        # ─── shipping_methods: we pull the primary key ShippingMethodId + Name ──────────
+        # ─── shipping_methods: use ShipperId as the join key ⟶ Name AS ShippingMethodName ──
         "shipping_methods": text("""
             SELECT
-                ShippingMethodId,
+                ShipperId,
                 Name               AS ShippingMethodName
             FROM dbo.ShippingMethods
             WHERE IsActive = 1
@@ -179,7 +178,7 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
         for c in cols:
             if c not in df_.columns:
                 raise KeyError(f"Expected column '{c}' in {df_.columns.tolist()}")
-            df_[c] = df_[c].astype(str)
+            df_[c] = df_[c].astype(str).str.strip()
 
     # 2) Merge orders + order_lines
     df = lines.merge(orders, on="OrderId", how="inner")
@@ -209,34 +208,32 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
             continue
 
         for c in cols:
-            tbl[c] = tbl[c].astype(str)
+            tbl[c] = tbl[c].astype(str).str.strip()
 
         df = df.merge(tbl[cols], on=keycol, how="left")
         logger.info(f"After merging '{name}': {len(df):,} rows")
 
-    # 4) Merge shipping_methods via Orders.ShippingMethodRequested → shipping_methods.ShippingMethodId
+    # 4) Merge shipping_methods via lines.ShipperId → shipping_methods.ShipperId
     sm = raw.get("shipping_methods", pd.DataFrame())
     if not sm.empty:
-        sm["ShippingMethodId"] = sm["ShippingMethodId"].astype(str)
-        sm["ShippingMethodName"] = sm["ShippingMethodName"].astype(str)
+        sm["ShipperId"]           = sm["ShipperId"].astype(str).str.strip()
+        sm["ShippingMethodName"]  = sm["ShippingMethodName"].astype(str).str.strip()
 
-        # Orders.ShippingMethodRequested is already a string (from step #1),
-        # so merge on that:
+        df["ShipperId"] = df["ShipperId"].astype(str).str.strip()
+
         df = df.merge(
-            sm[["ShippingMethodId","ShippingMethodName"]],
-            left_on="ShippingMethodRequested",
-            right_on="ShippingMethodId",
+            sm[["ShipperId", "ShippingMethodName"]],
+            on="ShipperId",
             how="left"
         )
         logger.info(f"After merging 'shipping_methods' → {len(df):,} rows")
     else:
-        # If the shipping_methods table was empty, create an empty column
         df["ShippingMethodName"] = np.nan
 
     # 5) Packs aggregation
     packs = raw.get("packs", pd.DataFrame())
     if not packs.empty:
-        packs["PickedForOrderLine"] = packs["PickedForOrderLine"].astype(str)
+        packs["PickedForOrderLine"] = packs["PickedForOrderLine"].astype(str).str.strip()
         packs = packs.rename(columns={"PickedForOrderLine": "OrderLineId"})
         psum = (
             packs.groupby("OrderLineId", as_index=False)
@@ -246,7 +243,7 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
                      DeliveryDate = ("DeliveryDate","max")
                  )
         )
-        psum["OrderLineId"] = psum["OrderLineId"].astype(str)
+        psum["OrderLineId"] = psum["OrderLineId"].astype(str).str.strip()
         df = df.merge(psum, on="OrderLineId", how="left")
         df[["WeightLb","ItemCount"]] = df[["WeightLb","ItemCount"]].fillna(0)
         logger.info(f"After merging 'packs': {len(df):,} rows")
