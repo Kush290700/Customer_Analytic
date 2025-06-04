@@ -127,10 +127,11 @@ def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> di
         """),
         "regions": text("SELECT RegionId, Name AS RegionName FROM dbo.Regions"),
         "shippers": text("SELECT ShipperId, Name AS Carrier FROM dbo.Shippers"),
+        # ─────────────── shipping_methods now only returns Name (no ShipperId) ───────────────
         "shipping_methods": text("""
             SELECT
-                ShippingMethodId AS SMId,
-                Name             AS ShippingMethodName
+                ShippingMethodId  AS SMId,
+                Name               AS ShippingMethodName
             FROM dbo.ShippingMethods
         """),
         "suppliers": text("SELECT SupplierId, Name AS SupplierName FROM dbo.Suppliers"),
@@ -199,8 +200,9 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
                          raw.get("products")),
         "regions":      ("RegionId", ["RegionId","RegionName"], raw.get("regions")),
         "shippers":     ("ShipperId", ["ShipperId","Carrier"], raw.get("shippers")),
+        # ─── “smethods” now uses ShippingMethodRequested → ShippingMethodName ───
+        "smethods":     ("ShippingMethodRequested", ["ShippingMethodRequested","ShippingMethodName"], raw.get("shipping_methods")),
         "suppliers":    ("SupplierId", ["SupplierId","SupplierName"], raw.get("suppliers")),
-        "smethods":     ("ShippingMethodRequested", ["ShippingMethodRequested","ShippingMethodName"], raw.get("shipping_methods"))
     }
 
     for name, (keycol, cols, tbl) in lookups.items():
@@ -208,7 +210,9 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
             logger.warning(f"Lookup '{name}' missing or empty – skipping")
             continue
         if name == "smethods":
+            # Rename the SMId column to match the key in the orders DataFrame:
             tbl = tbl.rename(columns={"SMId": "ShippingMethodRequested"})
+        # Ensure all lookup columns are string‐typed
         for c in cols:
             tbl[c] = tbl[c].astype(str)
         df = df.merge(tbl[cols], on=keycol, how="left")
