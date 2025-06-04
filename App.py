@@ -103,7 +103,8 @@ def load_and_prepare(path: str, start: str, end: str) -> pd.DataFrame:
     for col in required:
         if col not in df.columns:
             df[col] = np.nan
-
+        if "ShippingMethodName" in df.columns:
+        df["ShippingMethodRequested"] = df["ShippingMethodName"]
     # Build “Address” column
     df["Address1"] = df["Address1"].fillna("").astype(str)
     df["Address2"] = df["Address2"].fillna("").astype(str)
