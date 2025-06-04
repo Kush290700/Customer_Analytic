@@ -1,5 +1,3 @@
-# File: data_loader.py
-
 import os
 import datetime
 import logging
@@ -26,7 +24,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ─── (A) DATABASE CONNECTION + RAW FETCH  ────────────────────────────────────
 @lru_cache(maxsize=1)
 def get_engine():
     server   = os.getenv("DB_SERVER",   "")
@@ -85,7 +82,7 @@ def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> di
                 ShipperId,
                 QuantityShipped,
                 Price        AS SalePrice,
-                CostPrice    AS UnitCost,    -- <— alias CostPrice here if you like
+                CostPrice    AS UnitCost,    -- alias for clarity
                 DateShipped
             FROM dbo.OrderLines
             WHERE CreatedAt BETWEEN :start AND :end
@@ -115,14 +112,14 @@ def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> di
                 SKU,
                 Description   AS ProductName,
                 ListPrice     AS ProductListPrice,
-                CostPrice     AS UnitCost          -- <— THIS LINE CHANGED
+                CostPrice     AS UnitCost   -- alias CostPrice→UnitCost
             FROM dbo.Products
         """),
 
         "regions": text("SELECT RegionId, Name AS RegionName FROM dbo.Regions"),
         "shippers": text("SELECT ShipperId, Name AS Carrier FROM dbo.Shippers"),
 
-        # ─── shipping_methods: select ShipperId → ShippingMethodName ─────────────
+        # ─── shipping_methods: join on ShipperId → ShippingMethodName ─────────────
         "shipping_methods": text("""
             SELECT
                 ShippingMethodId,
@@ -247,8 +244,11 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
         df["DeliveryDate"] = pd.NaT
 
     # 5) Numeric safety for key numeric fields
-    for col in ["QuantityShipped","SalePrice","UnitCost","WeightLb","ItemCount"]:
-        df[col] = pd.to_numeric(df.get(col, 0), errors="coerce").fillna(0.0)
+    for col in ["QuantityShipped", "SalePrice", "UnitCost", "WeightLb", "ItemCount"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+        else:
+            df[col] = 0.0
 
     # 6) Compute Revenue, Cost, Profit
     df["UnitOfBillingId"] = df.get("UnitOfBillingId", "").astype(str)
@@ -283,7 +283,7 @@ def fetch_and_store_data(start: str = "2020-01-01",
     """
     1) Fetch raw tables behind the VPN
     2) Prepare & join them into one DataFrame
-    3) Write to Parquet
+    3) Save that DataFrame to `path` in Parquet format
     4) Return the freshly‐fetched DataFrame
     """
     raw = fetch_raw_tables(start, end)
