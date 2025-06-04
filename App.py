@@ -1,5 +1,3 @@
-# File: app.py
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -25,14 +23,20 @@ PARQUET_PATH = "cached_data.parquet"
 @st.cache_data(show_spinner=True)
 def load_and_prepare(path: str, start: str, end: str) -> pd.DataFrame:
     """
-    Load from Parquet if exists; otherwise fetch from DB and store.
+    Load from Parquet if it exists and is valid; otherwise fetch from DB and store.
     Returns DataFrame with derived fields.
     """
     cache_file = Path(path)
-    if not cache_file.exists():
-        df_fetched = fetch_and_store_data(start, end, path)
+
+    # Attempt to load existing Parquet; if it fails, re‐fetch.
+    if cache_file.exists():
+        try:
+            df_fetched = load_data(path)
+        except Exception:
+            # If any error (e.g. ArrowInvalid), delete/overwrite and re-fetch
+            df_fetched = fetch_and_store_data(start, end, path)
     else:
-        df_fetched = load_data(path)
+        df_fetched = fetch_and_store_data(start, end, path)
 
     df = df_fetched.copy()
 
@@ -52,7 +56,7 @@ def load_and_prepare(path: str, start: str, end: str) -> pd.DataFrame:
         "Date",
         "WeightLb",
         "ItemCount",
-        "Carrier",           # from shippers lookup
+        "Carrier",    # from shippers lookup
         "ProductName",
         "ShipDate",
     ]
@@ -61,11 +65,11 @@ def load_and_prepare(path: str, start: str, end: str) -> pd.DataFrame:
             df[col] = np.nan
 
     # ─── Address Logic Fix ─────────────────────────────────────────────────
-    # New logic: Address1 = address, Address2 = instructions. 
-    # So Address column should be exactly Address1, ignore Address2 here.
+    # New logic: Address1 = address, Address2 = instructions.
+    # So Address column should be exactly Address1.
     df["Address1"] = df["Address1"].fillna("").astype(str).str.strip()
     df["Address2"] = df["Address2"].fillna("").astype(str).str.strip()
-    df["Address"] = df["Address1"]  # only Address1, instructions remain in Address2 if needed
+    df["Address"] = df["Address1"]  # only Address1, ignore Address2 here
 
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     df["ShipDate"] = pd.to_datetime(df["ShipDate"], errors="coerce")
@@ -384,7 +388,6 @@ tabs = [
 ]
 st.sidebar.markdown("---")
 section = st.sidebar.radio("Go to", tabs)
-
 
 # ─── Instructions Tab ─────────────────────────────────────────────────────
 if section == "Instructions":
