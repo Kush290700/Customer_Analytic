@@ -1,3 +1,5 @@
+# File: app.py
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -23,17 +25,16 @@ PARQUET_PATH = "cached_data.parquet"
 @st.cache_data(show_spinner=True)
 def load_and_prepare(path: str, start: str, end: str) -> pd.DataFrame:
     """
-    Load from Parquet if it exists and is valid; otherwise fetch from DB and store.
+    Load from Parquet if valid; otherwise fetch from DB & store.
     Returns DataFrame with derived fields.
     """
     cache_file = Path(path)
 
-    # Attempt to load existing Parquet; if it fails, re‐fetch.
     if cache_file.exists():
         try:
             df_fetched = load_data(path)
         except Exception:
-            # If any error (e.g. ArrowInvalid), delete/overwrite and re-fetch
+            # If Parquet is corrupt or incompatible, re-fetch
             df_fetched = fetch_and_store_data(start, end, path)
     else:
         df_fetched = fetch_and_store_data(start, end, path)
@@ -56,7 +57,7 @@ def load_and_prepare(path: str, start: str, end: str) -> pd.DataFrame:
         "Date",
         "WeightLb",
         "ItemCount",
-        "Carrier",    # from shippers lookup
+        "ShippingMethodName",  # ← we’ll filter on this
         "ProductName",
         "ShipDate",
     ]
@@ -65,11 +66,10 @@ def load_and_prepare(path: str, start: str, end: str) -> pd.DataFrame:
             df[col] = np.nan
 
     # ─── Address Logic Fix ─────────────────────────────────────────────────
-    # New logic: Address1 = address, Address2 = instructions.
-    # So Address column should be exactly Address1.
+    # New logic: Address1 = address; Address2 = instructions (ignored in “Address”)
     df["Address1"] = df["Address1"].fillna("").astype(str).str.strip()
     df["Address2"] = df["Address2"].fillna("").astype(str).str.strip()
-    df["Address"] = df["Address1"]  # only Address1, ignore Address2 here
+    df["Address"] = df["Address1"]  # only Address1
 
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     df["ShipDate"] = pd.to_datetime(df["ShipDate"], errors="coerce")
@@ -245,30 +245,14 @@ selected_regions = st.sidebar.multiselect(
     default=["All"]
 )
 
-# ─── Detect whether “Carrier” has any non‐null values ──────────────────────
-carrier_values = sorted(df_all["Carrier"].dropna().unique())
-
-if carrier_values:
-    # Case A: We have at least one valid Carrier
-    st.sidebar.header("3. Shipping Carrier")
-    carrier_options = ["All"] + carrier_values
-    selected_carriers = st.sidebar.multiselect(
-        "Select Carrier(s)",
-        carrier_options,
-        default=["All"]
-    )
-    use_carrier_filter = True
-else:
-    # Case B: No Carrier values found → fall back to ShippingMethodName
-    st.sidebar.header("3. Shipping Method")
-    method_values = sorted(df_all["ShippingMethodName"].dropna().unique())
-    method_options = ["All"] + method_values
-    selected_methods = st.sidebar.multiselect(
-        "Select Shipping Method(s)",
-        method_options,
-        default=["All"]
-    )
-    use_carrier_filter = False
+st.sidebar.header("3. Shipping Method")
+all_methods = sorted(df_all["ShippingMethodName"].dropna().unique())
+method_options = ["All"] + all_methods
+selected_methods = st.sidebar.multiselect(
+    "Select Shipping Method(s)",
+    method_options,
+    default=["All"]
+)
 
 st.sidebar.header("4. Customer Filter")
 all_customers = sorted(df_all["CustomerName"].dropna().unique())
@@ -286,19 +270,16 @@ df_filtered = df_all.copy()
 if "All" not in selected_regions and selected_regions:
     df_filtered = df_filtered[df_filtered["RegionName"].isin(selected_regions)]
 
-# Carrier or Method filter
-if use_carrier_filter:
-    if "All" not in selected_carriers and selected_carriers:
-        df_filtered = df_filtered[df_filtered["Carrier"].isin(selected_carriers)]
-else:
-    if "All" not in selected_methods and selected_methods:
-        df_filtered = df_filtered[df_filtered["ShippingMethodName"].isin(selected_methods)]
+# Shipping Method filter
+if "All" not in selected_methods and selected_methods:
+    df_filtered = df_filtered[df_filtered["ShippingMethodName"].isin(selected_methods)]
 
 # CustomerName filter
 if "All" not in selected_customers and selected_customers:
     df_filtered = df_filtered[df_filtered["CustomerName"].isin(selected_customers)]
 
 no_data = df_filtered.empty
+
 
 # ─── Compute per‐customer aggregates ────────────────────────────────────────
 @st.cache_data(show_spinner=True)
@@ -408,6 +389,7 @@ tabs = [
 st.sidebar.markdown("---")
 section = st.sidebar.radio("Go to", tabs)
 
+
 # ─── Instructions Tab ─────────────────────────────────────────────────────
 if section == "Instructions":
     st.title("📝 Instructions & Usage")
@@ -418,7 +400,7 @@ if section == "Instructions":
         **How to use:**
         1. **Date Range** (Sidebar): filter orders by date.
         2. **Region Filter**: multi-select “All” or specific regions.
-        3. **Shipping Carrier**: multi-select “All” or specific carriers.
+        3. **Shipping Method**: multi-select “All” or specific methods.
         4. **Customer Filter**: multi-select “All” or specific customers.
 
         **Tabs:**
@@ -436,9 +418,9 @@ if section == "Instructions":
         - Subsequent visits use `cached_data.parquet`.
         - Required columns in the Parquet:
           `CustomerId, CustomerName, RegionName, Address1, Address2, City, Province, PostalCode,`
-          `OrderId, Revenue, Cost, Date, WeightLb, ItemCount, ShipperId (→ Carrier), ProductName, ShipDate`.
+          `OrderId, Revenue, Cost, Date, WeightLb, ItemCount, ShippingMethodName, ProductName, ShipDate`.
         - **Data currently starts from January 1, 2022 in the dataframe and will remain so until the next update.**
-
+        
         Enjoy exploring your customer data!
     """
     )
@@ -1096,4 +1078,4 @@ elif section == "Download Excel":
         file_name="Customer_Details.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-    st.info("The export reflects your current filters (date, region, carrier).")
+    st.info("The export reflects your current filters (date, region, shipping method, etc.).")
