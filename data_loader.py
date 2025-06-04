@@ -81,7 +81,7 @@ def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> di
                 OrderLineId,
                 OrderId,
                 ProductId,
-                ShipperId,                   -- ← We'll use this directly
+                ShipperId,
                 QuantityShipped,
                 Price        AS SalePrice,
                 CostPrice    AS UnitCost,
@@ -163,7 +163,7 @@ def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> di
 def prepare_full_data(raw: dict) -> pd.DataFrame:
     """
     Join together the raw tables into a single DataFrame, compute Revenue/Cost/Profit,
-    and add date-related fields. Returns one “full” DataFrame.
+    and add date‐related fields. Returns one “full” DataFrame.
     """
     orders = raw.get("orders", pd.DataFrame())
     lines  = raw.get("order_lines", pd.DataFrame())
@@ -171,7 +171,7 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
     if lines.empty:
         raise RuntimeError("No 'order_lines' returned – cannot prepare data")
 
-    # ─── 1) Cast join-key columns to string and strip whitespace ───────────────
+    # 1) Cast join‐key columns to string and strip whitespace
     for df_, cols in [
         (orders, ["OrderId", "CustomerId", "SalesRepId", "ShippingMethodRequested"]),
         (lines,  ["OrderLineId", "OrderId", "ProductId", "ShipperId"])
@@ -181,11 +181,11 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
                 raise KeyError(f"Expected column '{c}' in {df_.columns.tolist()}")
             df_[c] = df_[c].astype(str).str.strip()
 
-    # ─── 2) Merge orders + order_lines
+    # 2) Merge orders + order_lines
     df = lines.merge(orders, on="OrderId", how="inner")
     logger.info(f"After join orders ↔ order_lines: {len(df):,} rows")
 
-    # ─── 3) Lookups (customers, products, regions, suppliers) ────────────────
+    # 3) Lookups (customers, products, regions, suppliers)
     lookups = {
         "customers":    ("CustomerId", [
                              "CustomerId","CustomerName","RegionId","IsRetail",
@@ -212,7 +212,7 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
         df = df.merge(tbl[cols], on=keycol, how="left")
         logger.info(f"After merging '{name}': {len(df):,} rows")
 
-    # ─── 4) Merge “Shippers” via lines.ShipperId → shippers.ShipperId ─────────
+    # 4) Merge “Shippers” via lines.ShipperId → shippers.ShipperId
     shippers_df = raw.get("shippers", pd.DataFrame())
     if not shippers_df.empty:
         shippers_df["ShipperId"]           = shippers_df["ShipperId"].astype(str).str.strip()
@@ -229,7 +229,7 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
     else:
         df["ShippingMethodName"] = np.nan
 
-    # ─── 5) Packs aggregation ─────────────────────────────────────────────────
+    # 5) Packs aggregation
     packs = raw.get("packs", pd.DataFrame())
     if not packs.empty:
         packs["PickedForOrderLine"] = packs["PickedForOrderLine"].astype(str).str.strip()
@@ -251,14 +251,14 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
         df["ItemCount"]    = 0.0
         df["DeliveryDate"] = pd.NaT
 
-    # ─── 6) Numeric safety for key numeric fields ──────────────────────────────
+    # 6) Numeric safety for key numeric fields
     for col in ["QuantityShipped", "SalePrice", "UnitCost", "WeightLb", "ItemCount"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
         else:
             df[col] = 0.0
 
-    # ─── 7) Compute Revenue, Cost, Profit ────────────────────────────────────
+    # 7) Compute Revenue, Cost, Profit
     df["UnitOfBillingId"] = df.get("UnitOfBillingId", "").astype(str)
 
     df["Revenue"] = np.where(
@@ -273,7 +273,7 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
     )
     df["Profit"] = df["Revenue"] - df["Cost"]
 
-    # ─── 8) Date & delivery metrics ───────────────────────────────────────────
+    # 8) Date & delivery metrics
     df["Date"]         = pd.to_datetime(df["CreatedAt_order"], errors="coerce").dt.normalize()
     df["ShipDate"]     = pd.to_datetime(df.get("ShipDate"),     errors="coerce")
     df["DeliveryDate"] = pd.to_datetime(df.get("DeliveryDate"), errors="coerce")
