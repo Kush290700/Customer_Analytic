@@ -7,7 +7,7 @@ import altair as alt
 from io import BytesIO
 from pathlib import Path
 
-# ─── Import your data‐loading functions (unchanged) ────────────────────────
+# ─── Import your data‐loading functions ────────────────────────────────────
 from data_loader import fetch_and_store_data, load_data
 
 # ─── Page Config ─────────────────────────────────────────────────────────
@@ -38,24 +38,34 @@ def load_and_prepare(path: str, start: str, end: str) -> pd.DataFrame:
 
     # Ensure essential columns exist
     required = [
-        "CustomerId", "CustomerName", "RegionName", "IsRetail",
-        "Address1", "Address2", "City", "Province", "PostalCode", "Phone", "Email",
-        "OrderId", "Revenue", "Cost", "Date", "WeightLb", "ItemCount",
-        "ShippingMethodName", "ProductName", "ShipDate"
+        "CustomerId",
+        "CustomerName",
+        "RegionName",
+        "Address1",
+        "Address2",
+        "City",
+        "Province",
+        "PostalCode",
+        "OrderId",
+        "Revenue",
+        "Cost",
+        "Date",
+        "WeightLb",
+        "ItemCount",
+        "Carrier",           # from shippers lookup
+        "ProductName",
+        "ShipDate",
     ]
     for col in required:
         if col not in df.columns:
             df[col] = np.nan
 
-    # ─── Address Logic Fix ───────────────────────────────────────────────
-    # If Address2 contains the word "delivery", treat it as instructions and ignore in the combined Address.
-    df["Address1"] = df["Address1"].fillna("").astype(str)
-    df["Address2"] = df["Address2"].fillna("").astype(str)
-    def combine_address(a1: str, a2: str) -> str:
-        if "delivery" in a2.lower():
-            return a1.strip()
-        return (a1 + " " + a2).strip()
-    df["Address"] = df.apply(lambda row: combine_address(row["Address1"], row["Address2"]), axis=1)
+    # ─── Address Logic Fix ─────────────────────────────────────────────────
+    # New logic: Address1 = address, Address2 = instructions. 
+    # So Address column should be exactly Address1, ignore Address2 here.
+    df["Address1"] = df["Address1"].fillna("").astype(str).str.strip()
+    df["Address2"] = df["Address2"].fillna("").astype(str).str.strip()
+    df["Address"] = df["Address1"]  # only Address1, instructions remain in Address2 if needed
 
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     df["ShipDate"] = pd.to_datetime(df["ShipDate"], errors="coerce")
@@ -65,13 +75,6 @@ def load_and_prepare(path: str, start: str, end: str) -> pd.DataFrame:
     df["ItemCount"] = pd.to_numeric(df["ItemCount"], errors="coerce").fillna(0.0)
     df["Revenue"] = pd.to_numeric(df["Revenue"], errors="coerce").fillna(0.0)
     df["Cost"] = pd.to_numeric(df["Cost"], errors="coerce").fillna(0.0)
-
-    # CustomerType from IsRetail
-    df["CustomerType"] = np.where(
-        df["IsRetail"].astype(str).str.lower().isin(["true", "1"]),
-        "Retail",
-        "Wholesale",
-    )
 
     return df
 
@@ -120,10 +123,21 @@ def customer_excel_export(cust_agg: pd.DataFrame) -> BytesIO:
 
         # Customer Details sheet
         detail_cols = [
-            "CustomerId", "CustomerName", "RegionName",
-            "TotalRevenue", "TotalCost", "GrossProfit", "TotalOrders", "AvgOrderWt",
-            "FirstOrder", "LastOrder", "DeliveryTime", "Address", "City",
-            "Province", "PostalCode"
+            "CustomerId",
+            "CustomerName",
+            "RegionName",
+            "TotalRevenue",
+            "TotalCost",
+            "GrossProfit",
+            "TotalOrders",
+            "AvgOrderWt",
+            "FirstOrder",
+            "LastOrder",
+            "DeliveryTime",
+            "Address",
+            "City",
+            "Province",
+            "PostalCode"
         ]
         detail_cols = [c for c in detail_cols if c in df_copy.columns]
         df_copy[detail_cols].to_excel(writer, sheet_name="Customer Details", index=False)
@@ -132,7 +146,7 @@ def customer_excel_export(cust_agg: pd.DataFrame) -> BytesIO:
     return output
 
 
-# ─── Recommendation Logic (no webscraping) ────────────────────────────────
+# ─── Recommendation Logic ─────────────────────────────────────────────────
 @st.cache_data(show_spinner=True)
 def get_top_n_customers_all_regions(data: pd.DataFrame, n=50) -> pd.DataFrame:
     grouped = (
@@ -226,26 +240,17 @@ selected_regions = st.sidebar.multiselect(
     default=["All"]
 )
 
-st.sidebar.header("3. Customer Type")
-all_types = sorted(df_all["CustomerType"].dropna().unique())
-type_options = ["All"] + all_types
-selected_types = st.sidebar.multiselect(
-    "Select Type(s)",
-    type_options,
+st.sidebar.header("3. Shipping Carrier")
+# Fix: use 'Carrier' (from shippers lookup) instead of ShippingMethodName
+all_carriers = sorted(df_all["Carrier"].dropna().unique())
+carrier_options = ["All"] + all_carriers
+selected_carriers = st.sidebar.multiselect(
+    "Select Carrier(s)",
+    carrier_options,
     default=["All"]
 )
 
-st.sidebar.header("4. Shipping Method")
-# Fix: delivery method filter should show names, not IDs
-all_methods = sorted(df_all["ShippingMethodName"].dropna().unique())
-method_options = ["All"] + all_methods
-selected_methods = st.sidebar.multiselect(
-    "Select Method(s)",
-    method_options,
-    default=["All"]
-)
-
-st.sidebar.header("5. Customer Filter")
+st.sidebar.header("4. Customer Filter")
 all_customers = sorted(df_all["CustomerName"].dropna().unique())
 customer_options = ["All"] + all_customers
 selected_customers = st.sidebar.multiselect(
@@ -261,13 +266,9 @@ df_filtered = df_all.copy()
 if "All" not in selected_regions and selected_regions:
     df_filtered = df_filtered[df_filtered["RegionName"].isin(selected_regions)]
 
-# Customer Type filter
-if "All" not in selected_types and selected_types:
-    df_filtered = df_filtered[df_filtered["CustomerType"].isin(selected_types)]
-
-# Shipping Method filter (by name)
-if "All" not in selected_methods and selected_methods:
-    df_filtered = df_filtered[df_filtered["ShippingMethodName"].isin(selected_methods)]
+# Carrier filter
+if "All" not in selected_carriers and selected_carriers:
+    df_filtered = df_filtered[df_filtered["Carrier"].isin(selected_carriers)]
 
 # CustomerName filter
 if "All" not in selected_customers and selected_customers:
@@ -275,9 +276,13 @@ if "All" not in selected_customers and selected_customers:
 
 no_data = df_filtered.empty
 
-# ─── Compute per‐customer aggregates (cust_agg) ─────────────────────────────
+
+# ─── Compute per‐customer aggregates ────────────────────────────────────────
 @st.cache_data(show_spinner=True)
 def compute_customer_aggregates(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Aggregates per-customer metrics, including DeliveryTime from ShipDate.
+    """
     named_agg = {
         "CustomerName": ("CustomerName", "first"),
         "RegionName":   ("RegionName", "first"),
@@ -330,14 +335,28 @@ if not no_data:
     cust_agg = compute_customer_aggregates(df_filtered)
 else:
     cust_agg = pd.DataFrame(columns=[
-        "CustomerId", "CustomerName", "RegionName",
-        "TotalRevenue", "TotalCost", "TotalOrders", "TotalWeight",
-        "AvgOrderWt", "FirstOrder", "LastOrder", "DeliveryTime",
-        "Address", "City", "Province", "PostalCode",
-        "DaysSinceLastOrder", "MonthsActive", "RepeatRate"
+        "CustomerId",
+        "CustomerName",
+        "RegionName",
+        "TotalRevenue",
+        "TotalCost",
+        "TotalOrders",
+        "TotalWeight",
+        "AvgOrderWt",
+        "FirstOrder",
+        "LastOrder",
+        "DeliveryTime",
+        "Address",
+        "City",
+        "Province",
+        "PostalCode",
+        "DaysSinceLastOrder",
+        "MonthsActive",
+        "RepeatRate"
     ])
 
-# ─── Precompute Recommendations (per‐region “top50” + “recommended”) ──────
+
+# ─── Precompute Recommendations ────────────────────────────────────────────
 if not df_filtered.empty:
     rec_results = compute_recommendations(
         data=df_filtered,
@@ -349,6 +368,7 @@ else:
         "top50": pd.DataFrame(),
         "recommended": pd.DataFrame()
     }
+
 
 # ─── Tabs Navigation ───────────────────────────────────────────────────────
 tabs = [
@@ -374,11 +394,10 @@ if section == "Instructions":
         **Advanced Meat Warehouse Customer Analytics Dashboard**
 
         **How to use:**
-        1. **Date Range** near top of sidebar: filter orders by date.
+        1. **Date Range** (Sidebar): filter orders by date.
         2. **Region Filter**: multi-select “All” or specific regions.
-        3. **Customer Type**: multi-select “All”, “Retail”, “Wholesale”.
-        4. **Shipping Method**: multi-select “All” or specific method names.
-        5. **Customer Filter**: multi-select “All” or specific customers.
+        3. **Shipping Carrier**: multi-select “All” or specific carriers.
+        4. **Customer Filter**: multi-select “All” or specific customers.
 
         **Tabs:**
         - **Customer KPIs**: Top-line metrics and trends.
@@ -394,10 +413,10 @@ if section == "Instructions":
         - On first run, the app will fetch from SQL Server for the chosen date range, writing `cached_data.parquet`.
         - Subsequent visits use `cached_data.parquet`.
         - Required columns in the Parquet:
-          `CustomerId, CustomerName, RegionName, IsRetail, Address1, Address2, City, Province, PostalCode, Phone, Email,`
-          `OrderId, Revenue, Cost, Date, WeightLb, ItemCount, ShippingMethodName, ProductName, ShipDate`.
+          `CustomerId, CustomerName, RegionName, Address1, Address2, City, Province, PostalCode,`
+          `OrderId, Revenue, Cost, Date, WeightLb, ItemCount, ShipperId (→ Carrier), ProductName, ShipDate`.
         - **Data currently starts from January 1, 2022 in the dataframe and will remain so until the next update.**
-        
+
         Enjoy exploring your customer data!
     """
     )
@@ -1055,4 +1074,4 @@ elif section == "Download Excel":
         file_name="Customer_Details.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-    st.info("The export reflects your current filters (date, region, etc.).")
+    st.info("The export reflects your current filters (date, region, carrier).")
