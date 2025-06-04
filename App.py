@@ -83,141 +83,6 @@ def load_and_prepare(path: str, start: str, end: str) -> pd.DataFrame:
     return df
 
 
-# ─── Utility: Customer Excel Export ───────────────────────────────────────
-def customer_excel_export(cust_agg: pd.DataFrame) -> BytesIO:
-    """
-    Create an Excel file with:
-      - Sheet 'Instructions' (describing content)
-      - Sheet 'Customer Details' (one row per customer with address/contact)
-    """
-    df_copy = cust_agg.copy()
-
-    # Ensure GrossProfit exists:
-    if {"TotalRevenue", "TotalCost"}.issubset(df_copy.columns):
-        df_copy["GrossProfit"] = df_copy["TotalRevenue"] - df_copy["TotalCost"]
-    else:
-        df_copy["GrossProfit"] = 0.0
-
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        # Instructions sheet
-        instr_df = pd.DataFrame({
-            "A": [
-                "Customer Details Export",
-                "",
-                "Columns included:",
-                "- CustomerId",
-                "- CustomerName",
-                "- RegionName",
-                "- TotalRevenue",
-                "- TotalCost",
-                "- GrossProfit",
-                "- TotalOrders",
-                "- AvgOrderWt",
-                "- FirstOrder",
-                "- LastOrder",
-                "- DeliveryTime",
-                "- Address",
-                "- City",
-                "- Province",
-                "- PostalCode"
-            ]
-        })
-        instr_df.to_excel(writer, sheet_name="Instructions", index=False, header=False)
-
-        # Customer Details sheet
-        detail_cols = [
-            "CustomerId",
-            "CustomerName",
-            "RegionName",
-            "TotalRevenue",
-            "TotalCost",
-            "GrossProfit",
-            "TotalOrders",
-            "AvgOrderWt",
-            "FirstOrder",
-            "LastOrder",
-            "DeliveryTime",
-            "Address",
-            "City",
-            "Province",
-            "PostalCode"
-        ]
-        detail_cols = [c for c in detail_cols if c in df_copy.columns]
-        df_copy[detail_cols].to_excel(writer, sheet_name="Customer Details", index=False)
-
-    output.seek(0)
-    return output
-
-
-# ─── Recommendation Logic ─────────────────────────────────────────────────
-@st.cache_data(show_spinner=True)
-def get_top_n_customers_all_regions(data: pd.DataFrame, n=50) -> pd.DataFrame:
-    grouped = (
-        data.groupby(["RegionName", "CustomerName"], dropna=False)["Revenue"]
-            .sum()
-            .reset_index()
-            .rename(columns={"Revenue": "TotalRevenue"})
-            .sort_values(["RegionName", "TotalRevenue"], ascending=[True, False])
-    )
-    region_frames = []
-    for region, gdf in grouped.groupby("RegionName", dropna=False):
-        top_slice = gdf.head(n)
-        region_frames.append(top_slice)
-    if region_frames:
-        return pd.concat(region_frames, ignore_index=True)
-    return pd.DataFrame(columns=["RegionName", "CustomerName", "TotalRevenue"])
-
-
-@st.cache_data(show_spinner=True)
-def recommend_new_customers(
-    data: pd.DataFrame,
-    top_n_df: pd.DataFrame,
-    min_lineitem_revenue=500
-) -> pd.DataFrame:
-    recommended_frames = []
-    for region, subtop in top_n_df.groupby("RegionName", dropna=False):
-        rd = data[data["RegionName"] == region].copy()
-        if rd.empty:
-            continue
-        exclude = subtop["CustomerName"].unique()
-        rd = rd[~rd["CustomerName"].isin(exclude)]
-        rd = rd[rd["Revenue"] > min_lineitem_revenue]
-        if rd.empty:
-            continue
-        recs = (
-            rd.groupby(["RegionName", "CustomerName"], dropna=False)
-              .agg(
-                  TotalRevenue=("Revenue", "sum"),
-                  OrderFrequency=("OrderId", "nunique"),
-                  TotalQuantity=("ItemCount", "sum")
-              )
-              .reset_index()
-              .sort_values(["TotalRevenue", "OrderFrequency"], ascending=[False, False])
-        )
-        recommended_frames.append(recs)
-
-    if recommended_frames:
-        return pd.concat(recommended_frames, ignore_index=True)
-    return pd.DataFrame(columns=[
-        "RegionName", "CustomerName", "TotalRevenue", "OrderFrequency", "TotalQuantity"
-    ])
-
-
-@st.cache_data(show_spinner=True)
-def compute_recommendations(
-    data: pd.DataFrame,
-    top_n: int = 50,
-    min_lineitem_revenue: float = 500
-):
-    top_n_df = get_top_n_customers_all_regions(data, n=top_n)
-    recommended_df = recommend_new_customers(data, top_n_df, min_lineitem_revenue=min_lineitem_revenue)
-    return {
-        "top50": top_n_df,
-        "recommended": recommended_df
-    }
-
-
 # ─── Sidebar: Date Range Inputs ────────────────────────────────────────────
 st.sidebar.header("1. Date Range")
 start_date = st.sidebar.date_input("Start Date", value=pd.to_datetime("2023-01-01"))
@@ -234,6 +99,7 @@ df_all = df_all[
     (df_all["Date"] <= end_ts)
 ].copy()
 
+
 # ─── Sidebar: Filters ───────────────────────────────────────────────────────
 st.sidebar.header("2. Region Filter")
 all_regions = sorted(df_all["RegionName"].dropna().unique())
@@ -244,15 +110,30 @@ selected_regions = st.sidebar.multiselect(
     default=["All"]
 )
 
-st.sidebar.header("3. Shipping Carrier")
-# Fix: use 'Carrier' (from shippers lookup) instead of ShippingMethodName
-all_carriers = sorted(df_all["Carrier"].dropna().unique())
-carrier_options = ["All"] + all_carriers
-selected_carriers = st.sidebar.multiselect(
-    "Select Carrier(s)",
-    carrier_options,
-    default=["All"]
-)
+# ─── Detect whether “Carrier” has any non‐null values ──────────────────────
+carrier_values = sorted(df_all["Carrier"].dropna().unique())
+
+if carrier_values:
+    # Case A: We have at least one valid Carrier
+    st.sidebar.header("3. Shipping Carrier")
+    carrier_options = ["All"] + carrier_values
+    selected_carriers = st.sidebar.multiselect(
+        "Select Carrier(s)",
+        carrier_options,
+        default=["All"]
+    )
+    use_carrier_filter = True
+else:
+    # Case B: No Carrier values found → fall back to ShippingMethodName
+    st.sidebar.header("3. Shipping Method")
+    method_values = sorted(df_all["ShippingMethodName"].dropna().unique())
+    method_options = ["All"] + method_values
+    selected_methods = st.sidebar.multiselect(
+        "Select Shipping Method(s)",
+        method_options,
+        default=["All"]
+    )
+    use_carrier_filter = False
 
 st.sidebar.header("4. Customer Filter")
 all_customers = sorted(df_all["CustomerName"].dropna().unique())
@@ -270,16 +151,19 @@ df_filtered = df_all.copy()
 if "All" not in selected_regions and selected_regions:
     df_filtered = df_filtered[df_filtered["RegionName"].isin(selected_regions)]
 
-# Carrier filter
-if "All" not in selected_carriers and selected_carriers:
-    df_filtered = df_filtered[df_filtered["Carrier"].isin(selected_carriers)]
+# Carrier or Method filter
+if use_carrier_filter:
+    if "All" not in selected_carriers and selected_carriers:
+        df_filtered = df_filtered[df_filtered["Carrier"].isin(selected_carriers)]
+else:
+    if "All" not in selected_methods and selected_methods:
+        df_filtered = df_filtered[df_filtered["ShippingMethodName"].isin(selected_methods)]
 
 # CustomerName filter
 if "All" not in selected_customers and selected_customers:
     df_filtered = df_filtered[df_filtered["CustomerName"].isin(selected_customers)]
 
 no_data = df_filtered.empty
-
 
 # ─── Compute per‐customer aggregates ────────────────────────────────────────
 @st.cache_data(show_spinner=True)
