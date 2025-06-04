@@ -1,5 +1,7 @@
 # File: data_loader.py
 
+# (Unchanged except for the Address logic adjustment in load_and_prepare)
+
 import os
 import datetime
 import logging
@@ -27,15 +29,8 @@ logger = logging.getLogger(__name__)
 
 
 # ─── (A) DATABASE CONNECTION + RAW FETCH  ────────────────────────────────────
-#     These functions are only needed when you fetch behind the VPN and create
-#     the local Parquet. Once you have the Parquet, your Streamlit app should
-#     call `load_data(...)` instead of trying to connect.
-
 @lru_cache(maxsize=1)
 def get_engine():
-    """
-    Build & cache a SQLAlchemy engine. Used by fetch_raw_tables() only.
-    """
     server   = os.getenv("DB_SERVER",   "")
     database = os.getenv("DB_NAME",     "")
     user     = os.getenv("DB_USER",     "")
@@ -47,7 +42,6 @@ def get_engine():
     url = f"mssql+pymssql://{user}:{pwd}@{server}/{database}"
     try:
         engine = create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=10)
-        # Quick smoke test:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         logger.info("✅ Connected to database")
@@ -59,12 +53,6 @@ def get_engine():
 
 @lru_cache(maxsize=32)
 def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> dict:
-    """
-    Fetch each of the “raw” tables from SQL Server for the given date range.
-
-    Returns a dict of DataFrames keyed by table name:
-       {"orders": df_orders, "order_lines": df_lines, "customers": df_customers, ... }
-    """
     if end_date is None:
         end_date = datetime.datetime.now().strftime("%Y-%m-%d")
 
@@ -127,7 +115,6 @@ def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> di
         """),
         "regions": text("SELECT RegionId, Name AS RegionName FROM dbo.Regions"),
         "shippers": text("SELECT ShipperId, Name AS Carrier FROM dbo.Shippers"),
-        # ─────────────── shipping_methods now only returns Name (no ShipperId) ───────────────
         "shipping_methods": text("""
             SELECT
                 ShippingMethodId  AS SMId,
@@ -165,10 +152,6 @@ def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> di
 
 
 def prepare_full_data(raw: dict) -> pd.DataFrame:
-    """
-    Join together the raw tables into a single DataFrame, compute Revenue/Cost/Profit,
-    and add date‐related fields. Returns one “full” DataFrame.
-    """
     orders = raw.get("orders", pd.DataFrame())
     lines  = raw.get("order_lines", pd.DataFrame())
 
@@ -200,7 +183,6 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
                          raw.get("products")),
         "regions":      ("RegionId", ["RegionId","RegionName"], raw.get("regions")),
         "shippers":     ("ShipperId", ["ShipperId","Carrier"], raw.get("shippers")),
-        # ─── “smethods” now uses ShippingMethodRequested → ShippingMethodName ───
         "smethods":     ("ShippingMethodRequested", ["ShippingMethodRequested","ShippingMethodName"], raw.get("shipping_methods")),
         "suppliers":    ("SupplierId", ["SupplierId","SupplierName"], raw.get("suppliers")),
     }
@@ -210,9 +192,7 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
             logger.warning(f"Lookup '{name}' missing or empty – skipping")
             continue
         if name == "smethods":
-            # Rename the SMId column to match the key in the orders DataFrame:
             tbl = tbl.rename(columns={"SMId": "ShippingMethodRequested"})
-        # Ensure all lookup columns are string‐typed
         for c in cols:
             tbl[c] = tbl[c].astype(str)
         df = df.merge(tbl[cols], on=keycol, how="left")
@@ -274,30 +254,18 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
 def fetch_and_store_data(start: str = "2020-01-01",
                          end:   str = None,
                          path:  str = "cached_data.parquet") -> pd.DataFrame:
-    """
-    1) Fetch raw tables from the database (behind VPN) for the given date range.
-    2) Prepare & join them into a single DataFrame.
-    3) Save that DataFrame to `path` in Parquet format (for Git/tracking).
-    4) Return the freshly‐fetched DataFrame.
-    """
     raw = fetch_raw_tables(start, end)
     df  = prepare_full_data(raw)
 
-    # Ensure directory exists
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Write to Parquet
     df.to_parquet(out_path, index=False)
     logger.info(f"✅ Data written to '{path}' ({len(df):,} rows).")
     return df
 
 
 def load_data(path: str = "cached_data.parquet") -> pd.DataFrame:
-    """
-    Load the locally‐stored Parquet file and return it as a DataFrame.
-    If the file does not exist, raises FileNotFoundError with instructions.
-    """
     cache_file = Path(path)
     if not cache_file.exists():
         raise FileNotFoundError(
