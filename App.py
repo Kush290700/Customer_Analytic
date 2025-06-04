@@ -1,5 +1,3 @@
-# File: app.py
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -25,11 +23,12 @@ PARQUET_PATH = "cached_data.parquet"
 @st.cache_data(show_spinner=True)
 def load_and_prepare(path: str, start: str, end: str) -> pd.DataFrame:
     """
-    Load from Parquet if valid; otherwise fetch from DB & store.
+    Load from Parquet if it exists and is valid; otherwise fetch from DB and store.
     Returns DataFrame with derived fields.
     """
     cache_file = Path(path)
 
+    # Attempt to load existing Parquet; if it fails, re-fetch
     if cache_file.exists():
         try:
             df_fetched = load_data(path)
@@ -57,7 +56,7 @@ def load_and_prepare(path: str, start: str, end: str) -> pd.DataFrame:
         "Date",
         "WeightLb",
         "ItemCount",
-        "ShippingMethodName",  # ← we’ll filter on this
+        "ShippingMethodName",  # ← from ShipperId → shipping_methods
         "ProductName",
         "ShipDate",
     ]
@@ -153,6 +152,9 @@ def customer_excel_export(cust_agg: pd.DataFrame) -> BytesIO:
 # ─── Recommendation Logic ─────────────────────────────────────────────────
 @st.cache_data(show_spinner=True)
 def get_top_n_customers_all_regions(data: pd.DataFrame, n=50) -> pd.DataFrame:
+    """
+    Return top N customers by total revenue per region.
+    """
     grouped = (
         data.groupby(["RegionName", "CustomerName"], dropna=False)["Revenue"]
             .sum()
@@ -175,7 +177,12 @@ def recommend_new_customers(
     top_n_df: pd.DataFrame,
     min_lineitem_revenue=500
 ) -> pd.DataFrame:
+    """
+    For each region in top_n_df, find new customers not in top N,
+    but with any line‐item revenue > min_lineitem_revenue.
+    """
     recommended_frames = []
+
     for region, subtop in top_n_df.groupby("RegionName", dropna=False):
         rd = data[data["RegionName"] == region].copy()
         if rd.empty:
@@ -210,6 +217,12 @@ def compute_recommendations(
     top_n: int = 50,
     min_lineitem_revenue: float = 500
 ):
+    """
+    Runs:
+      1. Top N per region
+      2. Recommend new customers (no scraping)
+    Returns { "top50": DataFrame, "recommended": DataFrame }
+    """
     top_n_df = get_top_n_customers_all_regions(data, n=top_n)
     recommended_df = recommend_new_customers(data, top_n_df, min_lineitem_revenue=min_lineitem_revenue)
     return {
@@ -246,6 +259,7 @@ selected_regions = st.sidebar.multiselect(
 )
 
 st.sidebar.header("3. Shipping Method")
+# Now filter on ShippingMethodName (which came from ShipperId → shipping_methods)
 all_methods = sorted(df_all["ShippingMethodName"].dropna().unique())
 method_options = ["All"] + all_methods
 selected_methods = st.sidebar.multiselect(
@@ -400,7 +414,7 @@ if section == "Instructions":
         **How to use:**
         1. **Date Range** (Sidebar): filter orders by date.
         2. **Region Filter**: multi-select “All” or specific regions.
-        3. **Shipping Method**: multi-select “All” or specific methods.
+        3. **Shipping Method**: multi-select “All” or specific shipping methods (based on `ShipperId` → `ShippingMethods.Name`).
         4. **Customer Filter**: multi-select “All” or specific customers.
 
         **Tabs:**
@@ -420,7 +434,7 @@ if section == "Instructions":
           `CustomerId, CustomerName, RegionName, Address1, Address2, City, Province, PostalCode,`
           `OrderId, Revenue, Cost, Date, WeightLb, ItemCount, ShippingMethodName, ProductName, ShipDate`.
         - **Data currently starts from January 1, 2022 in the dataframe and will remain so until the next update.**
-        
+
         Enjoy exploring your customer data!
     """
     )
