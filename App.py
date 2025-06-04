@@ -247,48 +247,47 @@ df_all = df_all[
     (df_all["Date"] <= end_ts)
 ].copy()
 
-
 # ─── Sidebar: Filters ───────────────────────────────────────────────────────
 st.sidebar.header("2. Region Filter")
 all_regions = sorted(df_all["RegionName"].dropna().unique())
-region_options = ["All"] + all_regions
+# Default to all regions at load time:
 selected_regions = st.sidebar.multiselect(
     "Select Region(s)",
-    region_options,
-    default=["All"]
+    all_regions,
+    default=all_regions
 )
 
 st.sidebar.header("3. Shipping Method")
 all_methods = sorted(df_all["ShippingMethodName"].dropna().unique())
-method_options = ["All"] + all_methods
+# Default to all shipping methods at load time:
 selected_methods = st.sidebar.multiselect(
     "Select Shipping Method(s)",
-    method_options,
-    default=["All"]
+    all_methods,
+    default=all_methods
 )
 
 st.sidebar.header("4. Customer Filter")
 all_customers = sorted(df_all["CustomerName"].dropna().unique())
-customer_options = ["All"] + all_customers
+# Default to all customers at load time:
 selected_customers = st.sidebar.multiselect(
     "Select Customer(s)",
-    customer_options,
-    default=["All"]
+    all_customers,
+    default=all_customers
 )
 
 # ─── Apply filters sequentially into df_filtered ────────────────────────────
 df_filtered = df_all.copy()
 
 # Region filter
-if "All" not in selected_regions and selected_regions:
+if selected_regions:
     df_filtered = df_filtered[df_filtered["RegionName"].isin(selected_regions)]
 
-# Shipping Method filter (via ShipperId → Shippers.Name)
-if "All" not in selected_methods and selected_methods:
+# Shipping Method filter
+if selected_methods:
     df_filtered = df_filtered[df_filtered["ShippingMethodName"].isin(selected_methods)]
 
 # CustomerName filter
-if "All" not in selected_customers and selected_customers:
+if selected_customers:
     df_filtered = df_filtered[df_filtered["CustomerName"].isin(selected_customers)]
 
 no_data = df_filtered.empty
@@ -413,9 +412,9 @@ if section == "Instructions":
 
         **How to use:**
         1. **Date Range** (Sidebar): filter orders by date.
-        2. **Region Filter**: multi-select “All” or specific regions.
-        3. **Shipping Method**: multi-select “All” or specific shipping methods (pulled from `Shippers.Name`).
-        4. **Customer Filter**: multi-select “All” or specific customers.
+        2. **Region Filter**: multi-select regions.
+        3. **Shipping Method**: multi-select shipping methods.
+        4. **Customer Filter**: multi-select customers.
 
         **Tabs:**
         - **Customer KPIs**: Top-line metrics and trends.
@@ -824,7 +823,7 @@ elif section == "CLV & Profitability":
     st.markdown("---")
     st.subheader("Gross Margin % by Customer")
     cust_clv["GrossMarginPct"] = (
-        (cust_clv["TotalRevenue"] - cust_clv["TotalCost"]) 
+        (cust_clv["TotalRevenue"] - cust_clv["TotalCost"])
         / cust_clv["TotalRevenue"].replace({0: np.nan}) * 100
     ).round(2).fillna(0)
     margin_chart = (
