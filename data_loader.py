@@ -1,3 +1,5 @@
+# File: data_loader.py
+
 import os
 import datetime
 import logging
@@ -50,7 +52,6 @@ def get_engine():
 def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> dict:
     """
     Fetch each of the “raw” tables from SQL Server for the given date range.
-    Returns a dict of DataFrames keyed by table name.
     """
     if end_date is None:
         end_date = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -82,7 +83,7 @@ def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> di
                 ShipperId,
                 QuantityShipped,
                 Price        AS SalePrice,
-                CostPrice    AS UnitCost,    -- alias for clarity
+                CostPrice    AS UnitCost,
                 DateShipped
             FROM dbo.OrderLines
             WHERE CreatedAt BETWEEN :start AND :end
@@ -112,18 +113,17 @@ def fetch_raw_tables(start_date: str = "2020-01-01", end_date: str = None) -> di
                 SKU,
                 Description   AS ProductName,
                 ListPrice     AS ProductListPrice,
-                CostPrice     AS UnitCost   -- alias CostPrice→UnitCost
+                CostPrice     AS UnitCost
             FROM dbo.Products
         """),
 
         "regions": text("SELECT RegionId, Name AS RegionName FROM dbo.Regions"),
         "shippers": text("SELECT ShipperId, Name AS Carrier FROM dbo.Shippers"),
 
-        # ─── shipping_methods: join on ShipperId → ShippingMethodName ─────────────
+        # ─── shipping_methods: we pull the primary key ShippingMethodId + Name ──────────
         "shipping_methods": text("""
             SELECT
                 ShippingMethodId,
-                ShipperId,
                 Name               AS ShippingMethodName
             FROM dbo.ShippingMethods
             WHERE IsActive = 1
@@ -185,27 +185,20 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
     df = lines.merge(orders, on="OrderId", how="inner")
     logger.info(f"After join orders ↔ order_lines: {len(df):,} rows")
 
-    # 3) Lookups (customers, products, regions, shippers, shipping_methods, suppliers)
+    # 3) Lookups (customers, products, regions, shippers, suppliers)
     lookups = {
-        "customers":    ("CustomerId",
-                         [
+        "customers":    ("CustomerId", [
                              "CustomerId","CustomerName","RegionId","IsRetail",
                              "Address1","Address2","City","Province","PostalCode","Phone","Email"
-                         ],
-                         raw.get("customers")),
+                         ], raw.get("customers")),
 
-        "products":     ("ProductId",
-                         [
+        "products":     ("ProductId", [
                              "ProductId","SupplierId","UnitOfBillingId","ProductName","ProductListPrice","UnitCost"
-                         ],
-                         raw.get("products")),
+                         ], raw.get("products")),
 
         "regions":      ("RegionId", ["RegionId","RegionName"], raw.get("regions")),
 
         "shippers":     ("ShipperId", ["ShipperId","Carrier"], raw.get("shippers")),
-
-        # ─── shipping_methods: JOIN ON lines.ShipperId → shipping_methods.ShipperId ───
-        "smethods":     ("ShipperId", ["ShipperId","ShippingMethodName"], raw.get("shipping_methods")),
 
         "suppliers":    ("SupplierId", ["SupplierId","SupplierName"], raw.get("suppliers")),
     }
@@ -221,7 +214,26 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
         df = df.merge(tbl[cols], on=keycol, how="left")
         logger.info(f"After merging '{name}': {len(df):,} rows")
 
-    # 4) Packs aggregation
+    # 4) Merge shipping_methods via Orders.ShippingMethodRequested → shipping_methods.ShippingMethodId
+    sm = raw.get("shipping_methods", pd.DataFrame())
+    if not sm.empty:
+        sm["ShippingMethodId"] = sm["ShippingMethodId"].astype(str)
+        sm["ShippingMethodName"] = sm["ShippingMethodName"].astype(str)
+
+        # Orders.ShippingMethodRequested is already a string (from step #1),
+        # so merge on that:
+        df = df.merge(
+            sm[["ShippingMethodId","ShippingMethodName"]],
+            left_on="ShippingMethodRequested",
+            right_on="ShippingMethodId",
+            how="left"
+        )
+        logger.info(f"After merging 'shipping_methods' → {len(df):,} rows")
+    else:
+        # If the shipping_methods table was empty, create an empty column
+        df["ShippingMethodName"] = np.nan
+
+    # 5) Packs aggregation
     packs = raw.get("packs", pd.DataFrame())
     if not packs.empty:
         packs["PickedForOrderLine"] = packs["PickedForOrderLine"].astype(str)
@@ -243,14 +255,14 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
         df["ItemCount"]    = 0.0
         df["DeliveryDate"] = pd.NaT
 
-    # 5) Numeric safety for key numeric fields
+    # 6) Numeric safety for key numeric fields
     for col in ["QuantityShipped", "SalePrice", "UnitCost", "WeightLb", "ItemCount"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
         else:
             df[col] = 0.0
 
-    # 6) Compute Revenue, Cost, Profit
+    # 7) Compute Revenue, Cost, Profit
     df["UnitOfBillingId"] = df.get("UnitOfBillingId", "").astype(str)
 
     df["Revenue"] = np.where(
@@ -265,7 +277,7 @@ def prepare_full_data(raw: dict) -> pd.DataFrame:
     )
     df["Profit"] = df["Revenue"] - df["Cost"]
 
-    # 7) Date & delivery metrics
+    # 8) Date & delivery metrics
     df["Date"]         = pd.to_datetime(df["CreatedAt_order"], errors="coerce").dt.normalize()
     df["ShipDate"]     = pd.to_datetime(df.get("ShipDate"),     errors="coerce")
     df["DeliveryDate"] = pd.to_datetime(df.get("DeliveryDate"), errors="coerce")
