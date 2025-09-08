@@ -1,0 +1,246 @@
+openapi: 3.0.3
+info:
+  title: Customer Intel Analytics API
+  version: 0.1.0
+  description: >-
+    Local-only Flask analytics dashboard API. This spec covers the primary
+    endpoints exercised by tests and CI. Responses are JSON and may include
+    ETag and Cache-Control headers for client-side caching.
+servers:
+  - url: http://localhost:5000
+paths:
+  /api/filters_meta:
+    get:
+      summary: Metadata for UI filters
+      operationId: getFiltersMeta
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FiltersMeta'
+  /api/kpis:
+    get:
+      summary: KPI timeseries
+      operationId: getKpis
+      parameters:
+        - in: query
+          name: freq
+          schema:
+            type: string
+            enum: [MS, W-SUN]
+          description: Aggregation frequency (monthly MS or weekly W-SUN)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KpisResponse'
+  /api/rfm:
+    get:
+      summary: RFM distribution
+      operationId: getRfm
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  table:
+                    type: array
+                    items:
+                      type: object
+                  bins:
+                    type: object
+                required: [table]
+  /api/cohort:
+    get:
+      summary: Cohort matrix
+      operationId: getCohort
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  matrix:
+                    type: array
+                    items:
+                      type: array
+                      items:
+                        type: number
+  /api/analytics:
+    get:
+      summary: Aggregated analytics bundle
+      operationId: getAnalytics
+      responses:
+        '200':
+          description: OK
+          headers:
+            ETag:
+              description: Entity tag for cache validation
+              schema:
+                type: string
+            Cache-Control:
+              description: Cache directives
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsBundle'
+  /api/clv_dashboard:
+    get:
+      summary: CLV dashboard bundle
+      operationId: getClvDashboard
+      parameters:
+        - in: query
+          name: h
+          description: Horizon in years
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10
+        - in: query
+          name: method
+          schema:
+            type: string
+            enum: [heuristic, rf, linear, svr, xgb, lgbm, auto]
+        - in: query
+          name: topn
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  summary:
+                    type: object
+                  customers:
+                    type: array
+                    items:
+                      type: object
+  /api/product_insights:
+    get:
+      summary: Product insights with price targets
+      operationId: getProductInsights
+      parameters:
+        - in: query
+          name: days
+          schema:
+            type: integer
+            minimum: 1
+        - in: query
+          name: topn
+          schema:
+            type: integer
+            minimum: 1
+        - in: query
+          name: target_margin
+          schema:
+            type: number
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  table:
+                    type: array
+                    items:
+                      type: object
+  /api/forecast:
+    get:
+      summary: Forecast timeseries
+      operationId: getForecast
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForecastResponse'
+
+components:
+  schemas:
+    FiltersMeta:
+      type: object
+      properties:
+        regions:
+          type: array
+          items:
+            type: string
+        customers:
+          type: array
+          items:
+            type: string
+        methods:
+          type: array
+          items:
+            type: string
+      required: [regions, customers, methods]
+    KpisResponse:
+      type: object
+      properties:
+        series:
+          type: array
+          items:
+            type: object
+            properties:
+              Date:
+                type: string
+                format: date
+              Revenue:
+                type: number
+        summary:
+          type: object
+      required: [series]
+    AnalyticsBundle:
+      type: object
+      properties:
+        kpis:
+          $ref: '#/components/schemas/KpisResponse'
+        rfm:
+          type: object
+        cohort:
+          type: object
+      additionalProperties: true
+    ForecastResponse:
+      type: object
+      properties:
+        history:
+          type: array
+          items:
+            type: object
+            properties:
+              Date:
+                type: string
+                format: date
+              Revenue:
+                type: number
+        forecast:
+          type: array
+          items:
+            type: object
+            properties:
+              Date:
+                type: string
+                format: date
+              yhat:
+                type: number
+      required: [forecast]
+

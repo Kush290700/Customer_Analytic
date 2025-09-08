@@ -1,0 +1,24 @@
+pytest==7.4.4
+pytest-benchmark==4.0.0
+coverage==7.5.0
+locust==2.31.3
+ruff==0.5.7
+black==24.4.2
+mypy==1.10.0
+types-requests==2.31.0.10
+types-setuptools==70.3.0.20240710
+pyinstrument==4.7.2
+scalene==1.5.51
+matplotlib==3.8.4
+# Playwright used directly in Python fixtures; keep version compatible with Python 3.13
+playwright==1.55.0
+pytest-timeout==2.3.1
+pytest-cov==4.1.0
+hypothesis==6.112.1
+factory_boy==3.3.0
+freezegun==1.2.2
+jsonschema==4.23.0
+PyYAML==6.0.2
+schemathesis==3.29.10
+bandit==1.7.9
+safety==3.2.4
