@@ -31,8 +31,8 @@ profile: venv
 
 load: venv
 	mkdir -p perf/artifacts/load
-	LOCUST_P95_BUDGET_MS=200 $(VENV)/bin/locust -f tests/load/locust_tabs.py --headless -u 30 -r 3 -t 2m --host http://localhost:5000 || true
-	@echo "Load test artifacts (if any) under perf/artifacts/load/"
+	LOCUST_P95_BUDGET_MS=200 $(VENV)/bin/locust -f tests/load/locust_tabs.py --headless -u 30 -r 3 -t 2m --host http://localhost:5000 --csv perf/artifacts/load/locust --html perf/artifacts/load/report.html || true
+	@echo "Load test artifacts saved under perf/artifacts/load/"
 
 lint: venv
 	$(VENV)/bin/ruff check . && $(VENV)/bin/ruff format --check .
@@ -42,7 +42,7 @@ type: venv
 
 contract: venv
 	mkdir -p perf/artifacts/contract
-	APP_ENABLE_SCHEDULER=false ENABLE_METRICS=false TESTING=1 $(VENV)/bin/pytest -q -m contract
+	APP_ENABLE_SCHEDULER=false ENABLE_METRICS=false TESTING=1 $(VENV)/bin/pytest -q -m contract 2>&1 | tee perf/artifacts/contract/schemathesis.log || true
 
 sec: venv
 	@echo "[bandit] scanning .." && $(VENV)/bin/bandit -q -r ci_app || true
