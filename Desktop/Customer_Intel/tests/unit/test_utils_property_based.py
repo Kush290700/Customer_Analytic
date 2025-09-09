@@ -4,7 +4,10 @@ import math
 
 import pandas as pd
 import pytest
-from hypothesis import given, strategies as st
+
+hypothesis = pytest.importorskip("hypothesis")
+st = hypothesis.strategies
+given = hypothesis.given
 
 from ci_app.services.analytics import _safe_div, _complete_period_mask
 from ci_app.services.utils import fmt_date_or_none
@@ -38,4 +41,3 @@ def test_complete_period_mask_monotonic(freq: str):
             assert m is False
         if m is False:
             seen_false = True
-

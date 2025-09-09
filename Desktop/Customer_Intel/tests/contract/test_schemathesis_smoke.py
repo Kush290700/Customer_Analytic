@@ -4,13 +4,12 @@ import os
 from typing import Any, Dict
 
 import pytest
-import schemathesis
-import yaml
 
 from ci_app import create_app
 
 
 def _load_spec_dict() -> Dict[str, Any]:
+    yaml = pytest.importorskip("yaml")
     with open(os.path.join(os.getcwd(), "api", "openapi.yaml"), "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
@@ -24,6 +23,7 @@ def test_schemathesis_smoke_short_run():
     os.environ.setdefault("PARQUET_PATH", os.path.join(os.getcwd(), "cached_data.parquet"))
     app = create_app()
 
+    schemathesis = pytest.importorskip("schemathesis")
     spec = _load_spec_dict()
     schema = schemathesis.from_wsgi(spec, app)
 
@@ -36,4 +36,3 @@ def test_schemathesis_smoke_short_run():
             for result in endpoint.get_strategies().execute():
                 # Any error or schema violation will raise inside execute()
                 assert result.has_failures is False
-

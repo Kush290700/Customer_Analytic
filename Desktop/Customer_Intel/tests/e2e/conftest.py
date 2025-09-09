@@ -69,9 +69,13 @@ def base_url() -> str:
 def browser() -> Iterator[Browser]:
     with run_flask_app():
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
-            yield browser
-            browser.close()
+            try:
+                browser = pw.chromium.launch(headless=True)
+            except Exception as e:
+                pytest.skip(f"Playwright browser not available: {e}")
+            else:
+                yield browser
+                browser.close()
 
 
 @pytest.fixture()

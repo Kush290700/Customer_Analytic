@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-import json
 import os
 from typing import Any, Dict
 
 import pytest
-import yaml
-from jsonschema import validate
 
 from ci_app import create_app
 
 
 def _load_spec() -> Dict[str, Any]:
+    yaml = pytest.importorskip("yaml")
     with open(os.path.join(os.getcwd(), "api", "openapi.yaml"), "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
@@ -42,6 +40,8 @@ def test_responses_conform_to_openapi_schemas():
     client = app.test_client()
 
     spec = _load_spec()
+    jsonschema = pytest.importorskip("jsonschema")
+    validate = jsonschema.validate
 
     endpoints = [
         "/api/filters_meta",
@@ -62,4 +62,3 @@ def test_responses_conform_to_openapi_schemas():
             assert isinstance(payload, dict), f"Response for {ep} must be JSON object"
             # Perform a best-effort JSON schema validation
             validate(instance=payload, schema=schema)  # raises on failure
-
