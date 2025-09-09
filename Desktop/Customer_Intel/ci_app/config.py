@@ -108,6 +108,7 @@ def load_config() -> Dict[str, Any]:
             or "200/day;50/hour"
         ),
         RATELIMIT_STORAGE_URL=limiter_storage,
+        RATELIMIT_STORAGE_URI=limiter_storage,
         RATELIMIT_ENABLED=_bool(os.getenv("RATELIMIT_ENABLED"), True),
 
         # Cache
@@ -191,7 +192,7 @@ def load_config() -> Dict[str, Any]:
         FAST_INLINE_BUNDLES=_bool(os.getenv("FAST_INLINE_BUNDLES"), False),
         # Prewarm controls
         # Default to prewarm on start so graphs feel instant after boot
-        PREWARM_ON_START=_bool(os.getenv("PREWARM_ON_START"), True),
+        PREWARM_ON_START=_bool(os.getenv("PREWARM_ON_START"), not debug and not _bool(os.getenv("TESTING"), False)),
         PREWARM_HORIZONS=[int(x) for x in _list(os.getenv("PREWARM_HORIZONS", "1,3,5")) or [1,3,5]],
         PREWARM_REQUIRED=_bool(os.getenv("PREWARM_REQUIRED"), False),
         # Snapshot cache backend: prefer memory to save disk space unless explicitly enabled

@@ -44,6 +44,17 @@ def create_app() -> Flask:
     except Exception:
         pass
 
+    # Suppress noisy third-party warnings in local/dev (e.g., pkg_resources deprecation from flask_admin)
+    try:
+        import warnings
+        warnings.filterwarnings(
+            "ignore",
+            message=r"pkg_resources is deprecated as an API",
+            category=UserWarning,
+        )
+    except Exception:
+        pass
+
     app = Flask(
         __name__,
         template_folder="templates",
@@ -168,7 +179,7 @@ def create_app() -> Flask:
         from .observability import setup_prometheus_exporter
         setup_prometheus_exporter(app)
     except Exception as e:
-        app.logger.warning("Prometheus exporter init failed: %s", e)
+        app.logger.info("Prometheus exporter not attached: %s", e)
         try:
             register_metrics(app)
             app.wsgi_app = metrics_app(app.wsgi_app)
