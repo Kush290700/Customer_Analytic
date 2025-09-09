@@ -177,6 +177,17 @@ paths:
 
 components:
   schemas:
+    ErrorEnvelope:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+      required: [code, message]
     FiltersMeta:
       type: object
       properties:
@@ -243,4 +254,3 @@ components:
               yhat:
                 type: number
       required: [forecast]
-
